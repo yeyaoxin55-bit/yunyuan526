@@ -866,3 +866,5 @@
   - `.gitmodules` records official upstream sources for `coremark` and `riscv-tests`.
 - Staging preview confirmed the repository candidate contains source, tests, scripts, constraints, software support files, docs, and submodule references; large generated artifacts are ignored.
 - After the initial commit, `coremark` reported an untracked legacy `riscv_port/` directory. The active build scripts use `sw/coremark_port/`, so `.gitmodules` was adjusted to ignore untracked files inside the `coremark` submodule rather than adding stale local port files to the repository.
+- Added GitHub remote `origin = https://github.com/yeyaoxin55-bit/yunyuan526.git`.
+- Pushed `main` to GitHub. Current remote-tracking state after push: `b4654af (HEAD -> main, origin/main) Initial project import`.
