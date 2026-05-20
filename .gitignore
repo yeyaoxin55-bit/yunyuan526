@@ -1,0 +1,56 @@
+# Local backups
+/.project_backups/
+
+# Vivado and FPGA implementation outputs
+/build/
+/.Xil/
+/work/
+tight_setup_hold_pins.txt
+*.jou
+*.log
+*.backup.jou
+*.backup.log
+*.str
+*.pb
+*.dcp
+*.bit
+*.bin
+*.mcs
+*.ltx
+*.rpt
+*.wdb
+*.xpr
+*.xsa
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.cache/
+
+# ModelSim / simulator transient files
+transcript
+modelsim.ini
+vsim.wlf
+*.wlf
+*.vcd
+*.fst
+*.vstf
+
+# Local toolchains and downloaded SDKs
+/xpack-riscv-none-elf-gcc-15.2.0-1/
+
+# Object files and generated firmware binaries
+*.o
+*.obj
+*.elf
+*.map
+*.lst
+
+# OS/editor/cache files
+Thumbs.db
+.DS_Store
+__pycache__/
+scripts/__Previews/
+*.pyc
+*.swp
+*.tmp

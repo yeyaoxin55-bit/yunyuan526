@@ -1,0 +1,82 @@
+$ErrorActionPreference = "Stop"
+
+$required = @(
+  "rtl/defines.vh",
+  "rtl/cpu_top.v",
+  "rtl/clk_gen_50m_to_100m.v",
+  "rtl/cpu_core.v",
+  "rtl/regfile.v",
+  "rtl/alu.v",
+  "rtl/decoder.v",
+  "rtl/hazard_unit.v",
+  "rtl/imem.v",
+  "rtl/dmem.v",
+  "rtl/prefetch.v",
+  "rtl/branch_predictor.v",
+  "rtl/multiplier.v",
+  "rtl/uart.v",
+  "rtl/divider.v",
+  "rtl/csr_unit.v",
+  "rtl/soc_top.v",
+  "rtl/exception.v",
+  "rtl/axi4lite_if.v",
+  "tb/tb_cpu_top.v",
+  "tb/tb_load_use_timing_safe.v",
+  "tb/tb_load_branch_zero_stall.v",
+  "tb/tb_load_jalr_zero_stall.v",
+  "tb/tb_load_branch_same_rd_replay.v",
+  "tb/tb_load_branch_wrong_path_wb.v",
+  "tb/programs/load_branch_strict.hex",
+  "tb/programs/load_jalr_strict.hex",
+  "tb/programs/load_branch_same_rd_replay.hex",
+  "tb/programs/load_branch_wrong_path_wb.hex",
+  "tb/tb_uart_tx.v",
+  "tb/tb_soc_uart_hello.v",
+  "tb/tb_soc_uart_reset_start.v",
+  "tb/programs/smoke.hex",
+  "tb/programs/soc_fail.hex",
+  "sw/uart_hello/uart_hello.hex",
+  "constraints/top_100m.xdc",
+  "constraints/top_125m.xdc",
+  "constraints/tinyriscv_huoyue_uart.xdc",
+  "scripts/run_modelsim.ps1",
+  "scripts/run_external_modelsim.ps1",
+  "scripts/convert_elf_to_hex.ps1",
+  "scripts/build_baremetal.ps1",
+  "scripts/build_riscv_test.ps1",
+  "scripts/run_riscv_test.ps1",
+  "scripts/run_riscv_suite.ps1",
+  "scripts/run_vivado_synth.ps1",
+  "scripts/check_floorplan_hook.ps1",
+  "scripts/check_bp_resource_profile.ps1",
+  "scripts/check_vivado_generic_override.ps1",
+  "scripts/check_dmem_bram_read_hold.ps1",
+  "scripts/check_id_load_early_retire_boundary.ps1",
+  "scripts/check_id_load_early_mul_boundary.ps1",
+  "scripts/check_id_load_early_prefetch_base_boundary.ps1",
+  "scripts/check_id_load_early_opcode_boundary.ps1",
+  "scripts/check_redirect_from_replay_boundary.ps1",
+  "scripts/check_divider_operand_boundary.ps1",
+  "scripts/check_soc_board_clock.ps1",
+  "scripts/check_soc_reset_start_flow.ps1",
+  "scripts/vivado_synth.tcl",
+  "constraints/floorplan_soc_top_light.tcl",
+  "scripts/send_uart_image.ps1",
+  "sw/linker/yl3_rv32im.ld",
+  "sw/runtime/crt0.S",
+  "sw/runtime/yl3_platform.h",
+  "sw/riscv-tests-env/riscv_test.h"
+)
+
+$missing = @()
+foreach ($path in $required) {
+  if (-not (Test-Path -LiteralPath $path)) {
+    $missing += $path
+  }
+}
+
+if ($missing.Count -gt 0) {
+  Write-Error ("Missing required files:`n" + ($missing -join "`n"))
+}
+
+Write-Host "Project structure OK"

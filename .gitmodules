@@ -1,0 +1,7 @@
+[submodule "coremark"]
+	path = coremark
+	url = https://github.com/eembc/coremark.git
+	ignore = untracked
+[submodule "riscv-tests"]
+	path = riscv-tests
+	url = https://github.com/riscv-software-src/riscv-tests.git
