@@ -1,5 +1,6 @@
 # Local backups
 /.project_backups/
+/项目工程计划书.md
 
 # Vivado and FPGA implementation outputs
 /build/
