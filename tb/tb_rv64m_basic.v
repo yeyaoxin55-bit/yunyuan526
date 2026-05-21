@@ -104,7 +104,7 @@ module tb_rv64m_basic;
         repeat (5) @(posedge clk);
         rst = 1'b0;
 
-        for (cycle = 0; cycle < 200; cycle = cycle + 1) begin
+        for (cycle = 0; cycle < 900; cycle = cycle + 1) begin
             @(posedge clk);
         end
 

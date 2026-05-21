@@ -1,12 +1,13 @@
 # YunyuanLegend 3.0 RISC-V CPU
 
-This repository contains a compact RV32IM five-stage pipelined CPU project targeting simulation, CoreMark performance testing, and Xilinx Zynq-7020 FPGA bring-up.
+This repository contains a compact RV32IM/RV64IM-parameterized five-stage pipelined CPU project targeting simulation, CoreMark performance testing, and Xilinx Zynq-7020 FPGA bring-up.
 
 The current working direction prioritizes performance first. Area is still tracked, but FPGA resource usage is treated as a secondary constraint when it conflicts with CoreMark throughput or timing closure.
 
 ## Project Status
 
-- ISA target: RV32IM, bare-metal execution
+- ISA target: RV32IM by default, with `XLEN=64` directed support for RV64IM integer data-path semantics
+- Address map: current SoC/loader/MMIO integration keeps 32-bit addresses while CPU integer registers, ALU, CSR counters, DMEM data, and M-extension operands/results scale with `XLEN`
 - Main FPGA target: Xilinx Zynq-7020, Huoyue board constraints included
 - Main board top: `rtl/soc_top.v`
 - Performance top: `rtl/fpga_coremark_top.v`
@@ -74,6 +75,8 @@ Run the full local ModelSim regression:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_modelsim.ps1
 ```
+
+The ModelSim regression includes directed `XLEN=64` RV64I/RV64M tests (`tb_rv64i_basic` and `tb_rv64m_basic`) in addition to the default RV32IM tests.
 
 Run the official RISC-V test flow through the provided script:
 

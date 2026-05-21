@@ -868,3 +868,12 @@
 - After the initial commit, `coremark` reported an untracked legacy `riscv_port/` directory. The active build scripts use `sw/coremark_port/`, so `.gitmodules` was adjusted to ignore untracked files inside the `coremark` submodule rather than adding stale local port files to the repository.
 - Added GitHub remote `origin = https://github.com/yeyaoxin55-bit/yunyuan526.git`.
 - Pushed `main` to GitHub. Current remote-tracking state after push: `b4654af (HEAD -> main, origin/main) Initial project import`.
+
+# 2026-05-21 RV64IM parameterization
+
+- Confirmed the original architecture intent for RV32I/RV64I was only partially implemented: `XLEN` existed, but the core pipeline, decoder, DMEM, and test harnesses still contained many fixed 32-bit data-path assumptions.
+- Added a documented RV64IM parameterization design and implementation plan under `docs/superpowers/`.
+- Added directed `XLEN=64` ModelSim tests for RV64I W-class ALU/load-store behavior and RV64M W-class multiply/divide/remainder behavior.
+- Implemented internal `word_op` decode/execute semantics for RV64 W-class instructions while keeping `XLEN` as the external architecture-width parameter.
+- Parameterized the CPU integer data path, CSR/regfile/ALU/multiplier/divider instances, DMEM data width, and top-level DMEM wiring so RV32 remains the default and RV64 can be selected with `XLEN=64`.
+- Verification passed: focused RV32/RV64 smoke tests, full local ModelSim regression including existing RV32IM/SoC tests and new `tb_rv64i_basic`/`tb_rv64m_basic`, and project structure check.
