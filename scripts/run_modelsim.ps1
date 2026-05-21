@@ -69,6 +69,8 @@ $sources = @(
   "tb/tb_mul.v",
   "tb/tb_mul_nonblocking.v",
   "tb/tb_div.v",
+  "tb/tb_rv64i_basic.v",
+  "tb/tb_rv64m_basic.v",
   "tb/tb_soc_uart_hello.v",
   "tb/tb_soc_uart_reset_start.v",
   "tb/tb_soc_uart_loader.v",
@@ -118,6 +120,8 @@ $tests = @(
   "tb_mul",
   "tb_mul_nonblocking",
   "tb_div",
+  "tb_rv64i_basic",
+  "tb_rv64m_basic",
   "tb_soc_uart_hello",
   "tb_soc_uart_reset_start",
   "tb_soc_uart_loader"
