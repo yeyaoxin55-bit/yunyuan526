@@ -2,6 +2,8 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$IMemHex,
   [string]$DMemHex = "",
+  [ValidateSet(32, 64)]
+  [int]$XLEN = 64,
   [int]$MaxCycles = 200000,
   [uint32]$DMemBase = 0x00010000,
   [uint32]$PassAddr = 0x00017ff0,
@@ -136,6 +138,7 @@ if ($LogAllSignals.IsPresent -or $resolvedWaveFile -ne "") {
 $vsimArgs += @(
   "-lib", $workLib,
   "tb_external_program",
+  "-gXLEN=$XLEN",
   "-gMAX_CYCLES=$MaxCycles",
   "-gDMEM_BASE=$DMemBase",
   "-gMUL_STAGES=$MulStages",

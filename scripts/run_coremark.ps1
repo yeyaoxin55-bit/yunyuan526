@@ -1,5 +1,9 @@
 param(
-  [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
+  [string]$ToolPrefix = "riscv64-unknown-elf-",
+  [ValidateSet(32, 64)]
+  [int]$XLEN = 64,
+  [string]$March = "",
+  [string]$Mabi = "",
   [int]$Iterations = 1,
   [int]$TotalDataSize = 2000,
   [int]$MaxCycles = 2000000,
@@ -26,11 +30,18 @@ $buildArgs = @(
   "-ExecutionPolicy", "Bypass",
   "-File", (Join-Path $repoRoot "scripts\build_coremark.ps1"),
   "-ToolPrefix", $ToolPrefix,
+  "-XLEN", $XLEN,
   "-Iterations", $Iterations,
   "-TotalDataSize", $TotalDataSize,
   "-CpuHz", $CpuHz,
   "-OptLevel", $OptLevel
 )
+if ($March -ne "") {
+  $buildArgs += @("-March", $March)
+}
+if ($Mabi -ne "") {
+  $buildArgs += @("-Mabi", $Mabi)
+}
 if ($ExtraCFlags -ne "") {
   $buildArgs += @("-ExtraCFlags", $ExtraCFlags)
 }
@@ -51,7 +62,8 @@ $objcopy = ($objcopyLine -replace "^OBJCOPY=", "").Trim()
 $hexOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\convert_elf_to_hex.ps1") `
   -Elf $elf `
   -Objcopy $objcopy `
-  -OutDir (Join-Path $repoRoot "build\coremark\hex") 2>&1
+  -OutDir (Join-Path $repoRoot "build\coremark\hex") `
+  -DMemWordBytes ($XLEN / 8) 2>&1
 $hexOutput
 if ($LASTEXITCODE -ne 0) {
   throw "CoreMark ELF to hex conversion failed"
@@ -72,6 +84,7 @@ $simArgs = @(
   "-DMemHex", $dmem,
   "-MaxCycles", $MaxCycles,
   "-DMemBase", 65536,
+  "-XLEN", $XLEN,
   "-PassAddr", 98288,
   "-FailAddr", 98292,
   "-ResultAddr", 98296,

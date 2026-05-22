@@ -1,5 +1,5 @@
 /*
- * CoreMark baremetal port for the YL3 RV32IM ModelSim harness.
+ * CoreMark baremetal port for the YL3 RV32IM/RV64IM harness.
  */
 #ifndef YL3_CORE_PORTME_H
 #define YL3_CORE_PORTME_H
@@ -29,7 +29,11 @@ typedef unsigned short ee_u16;
 typedef signed int     ee_s32;
 typedef unsigned char  ee_u8;
 typedef unsigned int   ee_u32;
+#if defined(__riscv_xlen) && (__riscv_xlen == 64)
+typedef unsigned long  ee_ptr_int;
+#else
 typedef ee_u32         ee_ptr_int;
+#endif
 typedef ee_u32         ee_size_t;
 typedef ee_u32         CORE_TICKS;
 
@@ -55,10 +59,18 @@ typedef ee_u32         CORE_TICKS;
 #endif
 
 #ifndef COMPILER_VERSION
-#define COMPILER_VERSION "xPack GCC RV32IM"
+#if defined(__riscv_xlen) && (__riscv_xlen == 64)
+#define COMPILER_VERSION "RISC-V GCC RV64IM"
+#else
+#define COMPILER_VERSION "RISC-V GCC RV32IM"
+#endif
 #endif
 #ifndef COMPILER_FLAGS
-#define COMPILER_FLAGS "-Os -march=rv32im_zifencei -mabi=ilp32"
+#if defined(__riscv_xlen) && (__riscv_xlen == 64)
+#define COMPILER_FLAGS "-O3 -march=rv64im -mabi=lp64"
+#else
+#define COMPILER_FLAGS "-O3 -march=rv32im -mabi=ilp32"
+#endif
 #endif
 #ifndef MEM_LOCATION
 #define MEM_LOCATION "STATIC"
