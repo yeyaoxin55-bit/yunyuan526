@@ -5,6 +5,7 @@ module tb_load_base_from_load_resp_no_early;
     reg rst;
     integer cycle;
     integer early_resp_base_violation;
+    integer delayed_resp_early_count;
     wire [31:0] debug_dmem_word1;
     wire [31:0] debug_dmem_word2;
 
@@ -37,11 +38,18 @@ module tb_load_base_from_load_resp_no_early;
 
     initial begin
         early_resp_base_violation = 0;
+        delayed_resp_early_count = 0;
         rst = 1'b1;
         repeat (5) @(posedge clk);
         rst = 1'b0;
 
         for (cycle = 0; cycle < 160; cycle = cycle + 1) begin
+            @(negedge clk);
+            if (dut.u_core.id_load_early_read &&
+                (dut.u_core.if_id_pc == 32'h0000001c)) begin
+                delayed_resp_early_count = delayed_resp_early_count + 1;
+            end
+
             @(posedge clk);
             if (dut.u_core.id_load_early_read &&
                 dut.u_core.load_wb_write_en &&
@@ -59,13 +67,17 @@ module tb_load_base_from_load_resp_no_early;
                     $display("FAIL load-base-from-load-resp early-read violation count=%0d", early_resp_base_violation);
                     $finish;
                 end
-                $display("PASS load base from load response does not early-read");
+                if (delayed_resp_early_count != 1) begin
+                    $display("FAIL load-base-from-load-resp delayed early count=%0d", delayed_resp_early_count);
+                    $finish;
+                end
+                $display("PASS load base from load response uses delayed early-read");
                 $finish;
             end
         end
 
-        $display("FAIL load-base-from-load-resp timeout: word1=%08x word2=%08x violation=%0d",
-                 debug_dmem_word1, debug_dmem_word2, early_resp_base_violation);
+        $display("FAIL load-base-from-load-resp timeout: word1=%08x word2=%08x violation=%0d delayed=%0d",
+                 debug_dmem_word1, debug_dmem_word2, early_resp_base_violation, delayed_resp_early_count);
         $finish;
     end
 endmodule

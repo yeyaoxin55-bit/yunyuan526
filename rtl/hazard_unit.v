@@ -16,9 +16,10 @@ module hazard_unit #(
     input wire if_id_conservative_load_use,
     input wire if_id_control_load_replay,
     input wire if_id_control_load_early_replay,
-    input wire mul_pending_valid,
-    input wire [4:0] mul_pending_rd,
-    input wire mul_pipeline_busy,
+    input wire if_id_mul_src_dep_i,
+    input wire if_id_mul_waw_dep_i,
+    input wire if_id_mul_order_dep_i,
+    input wire if_id_mul_struct_dep_i,
     input wire ex_mem_reg_write,
     input wire ex_mem_mem_read,
     input wire [4:0] ex_mem_rd,
@@ -46,15 +47,10 @@ module hazard_unit #(
                                   id_ex_load_early_valid) &&
                                 !((ENABLE_LOAD_CONTROL_EARLY_REPLAY != 0) &&
                                   if_id_control_load_early_replay);
-    wire if_id_mul_src_dep = mul_pending_valid &&
-                             (mul_pending_rd != 5'd0) &&
-                             ((mul_pending_rd == if_id_rs1) || (mul_pending_rd == if_id_rs2));
-    wire if_id_mul_waw_dep = mul_pending_valid &&
-                             (mul_pending_rd != 5'd0) &&
-                             if_id_reg_write &&
-                             (mul_pending_rd == if_id_rd);
-    wire if_id_mul_order_dep = mul_pending_valid && if_id_csr_instr;
-    wire if_id_mul_struct_dep = mul_pipeline_busy && if_id_is_mul;
+    wire if_id_mul_src_dep = if_id_mul_src_dep_i;
+    wire if_id_mul_waw_dep = if_id_mul_waw_dep_i;
+    wire if_id_mul_order_dep = if_id_mul_order_dep_i;
+    wire if_id_mul_struct_dep = if_id_mul_struct_dep_i;
 
     assign stall = ENABLE_LOAD_USE_STALL && (id_ex_load_use_stall ||
                                              (if_id_needs_ex_mem_load_stall && ex_mem_load_use)) ||

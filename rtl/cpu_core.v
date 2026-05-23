@@ -11,7 +11,8 @@ module cpu_core #(
     parameter BP_BHT_DEPTH = 128,
     parameter BP_BHR_WIDTH = 3,
     parameter BP_BTB_DEPTH = 64,
-    parameter BP_LOCAL_HISTORY = 1
+    parameter BP_LOCAL_HISTORY = 1,
+    parameter BP_INIT_TAKEN = 0
 ) (
     input wire clk,
     input wire rst,
@@ -25,6 +26,12 @@ module cpu_core #(
     output reg [31:0] dmem_wdata,
     input wire [31:0] dmem_rdata
 );
+    localparam MUL_META_DEPTH = MUL_STAGES + 2;
+    localparam MUL_FORWARD_STAGE = MUL_META_DEPTH - 2;
+    localparam MUL_FIFO_DEPTH = 8;
+    localparam [3:0] MUL_FIFO_DEPTH_COUNT = MUL_FIFO_DEPTH;
+    localparam [4:0] MUL_FIFO_DEPTH_EXT = MUL_FIFO_DEPTH;
+
     reg [31:0] pc;
     reg [31:0] fetch_pc_q;
     reg fetch_valid_q;
@@ -38,6 +45,7 @@ module cpu_core #(
     reg if_id_valid;
     reg if_id_mem_read_q;
     reg [4:0] if_id_load_rs1_q;
+    reg if_id_load_rs1_nonzero_q;
     reg [31:0] if_id_load_imm_q;
 
     reg id_ex_valid;
@@ -90,13 +98,18 @@ module cpu_core #(
     reg [4:0] load_resp_rd;
     reg [2:0] load_resp_funct3;
     reg load_resp_reg_write;
-    reg mul_pending_valid;
-    reg [4:0] mul_pending_rd;
-    reg mul_pending_reg_write;
-    reg mul_resp_valid;
-    reg [4:0] mul_resp_rd;
-    reg [31:0] mul_resp_data;
-    reg mul_resp_reg_write;
+    reg load_resp_early_valid;
+    reg [31:0] load_resp_early_data;
+    reg [MUL_META_DEPTH-1:0] mul_meta_valid_pipe;
+    reg [4:0] mul_meta_rd_pipe [0:MUL_META_DEPTH-1];
+    reg mul_meta_reg_write_pipe [0:MUL_META_DEPTH-1];
+    reg [4:0] mul_fifo_rd [0:MUL_FIFO_DEPTH-1];
+    reg [31:0] mul_fifo_data [0:MUL_FIFO_DEPTH-1];
+    reg mul_fifo_reg_write [0:MUL_FIFO_DEPTH-1];
+    reg [MUL_FIFO_DEPTH-1:0] mul_fifo_valid;
+    reg [2:0] mul_fifo_head;
+    reg [2:0] mul_fifo_tail;
+    reg [3:0] mul_fifo_count;
     reg div_cmd_valid;
     reg [31:0] div_cmd_rs1_data;
     reg [31:0] div_cmd_rs2_data;
@@ -136,6 +149,11 @@ module cpu_core #(
     reg ctrl_load_pending_rs2_from_load;
     reg [4:0] ctrl_load_pending_load_rd;
     reg ctrl_load_pending_wait_resp;
+    reg [31:0] ras_stack [0:7];
+    reg [3:0] ras_count;
+    integer ras_i;
+    integer mul_comb_i;
+    integer mul_seq_i;
     wire replay_flush;
 
     wire [6:0] dec_opcode;
@@ -177,19 +195,24 @@ module cpu_core #(
     wire mem_wb_write_en = mem_wb_retire_valid && mem_wb_reg_write;
     wire [7:0] load_resp_byte = dmem_rdata[7:0];
     wire [15:0] load_resp_half = dmem_rdata[15:0];
-    wire [31:0] load_resp_data = (load_resp_funct3 == 3'b000) ? {{24{load_resp_byte[7]}}, load_resp_byte} :
-                                  (load_resp_funct3 == 3'b001) ? {{16{load_resp_half[15]}}, load_resp_half} :
-                                  (load_resp_funct3 == 3'b100) ? {24'h000000, load_resp_byte} :
-                                  (load_resp_funct3 == 3'b101) ? {16'h0000, load_resp_half} :
-                                  dmem_rdata;
+    wire [31:0] load_resp_mem_data = (load_resp_funct3 == 3'b000) ? {{24{load_resp_byte[7]}}, load_resp_byte} :
+                                     (load_resp_funct3 == 3'b001) ? {{16{load_resp_half[15]}}, load_resp_half} :
+                                     (load_resp_funct3 == 3'b100) ? {24'h000000, load_resp_byte} :
+                                     (load_resp_funct3 == 3'b101) ? {16'h0000, load_resp_half} :
+                                     dmem_rdata;
+    wire [31:0] load_resp_data = load_resp_early_valid ? load_resp_early_data :
+                                 load_resp_mem_data;
     wire [7:0] load_resp_forward_byte = dmem_rdata[7:0];
     wire [15:0] load_resp_forward_half = dmem_rdata[15:0];
-    (* keep = "true" *) wire [31:0] load_resp_forward_data =
+    (* keep = "true" *) wire [31:0] load_resp_forward_mem_data =
                                   (load_resp_funct3 == 3'b000) ? {{24{load_resp_forward_byte[7]}}, load_resp_forward_byte} :
                                   (load_resp_funct3 == 3'b001) ? {{16{load_resp_forward_half[15]}}, load_resp_forward_half} :
                                   (load_resp_funct3 == 3'b100) ? {24'h000000, load_resp_forward_byte} :
                                   (load_resp_funct3 == 3'b101) ? {16'h0000, load_resp_forward_half} :
                                   dmem_rdata;
+    (* keep = "true" *) wire [31:0] load_resp_forward_data =
+                                  load_resp_early_valid ? load_resp_early_data :
+                                  load_resp_forward_mem_data;
     wire [7:0] id_ex_early_load_byte = dmem_rdata[7:0];
     wire [15:0] id_ex_early_load_half = dmem_rdata[15:0];
     wire [31:0] id_ex_early_load_data = (id_ex_funct3 == 3'b000) ? {{24{id_ex_early_load_byte[7]}}, id_ex_early_load_byte} :
@@ -200,6 +223,8 @@ module cpu_core #(
     wire load_resp_retire_valid = load_resp_valid && !replay_flush;
     wire load_wb_write_en = load_resp_retire_valid && load_resp_reg_write;
     wire mul_busy;
+    wire mul_early_valid;
+    wire [31:0] mul_early_result;
     wire mul_valid;
     wire [31:0] mul_result;
     wire mul_complete_valid;
@@ -311,17 +336,90 @@ module cpu_core #(
                         (dec_opcode == `OPCODE_OP);
     wire [4:0] dec_hazard_rs1 = dec_uses_rs1 ? dec_rs1 : 5'd0;
     wire [4:0] dec_hazard_rs2 = dec_uses_rs2 ? dec_rs2 : 5'd0;
-    wire mul_start = (FAST_MUL == 0) && id_ex_is_mul &&
-                     !mul_pending_valid && !mul_resp_valid &&
-                     !mul_busy && !mul_valid && !redirect_valid;
-    wire mul_scoreboard_valid = (FAST_MUL == 0) &&
-                                (((mul_pending_valid || mul_resp_valid) && !mul_retire_valid) ||
-                                 mul_start);
-    wire [4:0] mul_scoreboard_rd = mul_start ? id_ex_rd :
-                                    mul_resp_valid ? mul_resp_rd :
-                                    mul_pending_rd;
+    wire mul_fifo_empty = (mul_fifo_count == 4'd0);
+    wire mul_fifo_full = (mul_fifo_count == MUL_FIFO_DEPTH_COUNT);
+    wire [4:0] mul_complete_rd = mul_meta_rd_pipe[MUL_META_DEPTH-1];
+    wire mul_complete_reg_write = mul_meta_reg_write_pipe[MUL_META_DEPTH-1];
+    wire mul_complete_to_wb = mul_complete_valid && mul_fifo_empty;
+    wire mul_issue_ready;
+    wire mul_start;
+    reg [4:0] mul_outstanding_count;
+    reg if_id_rs1_mul_pending_dep_r;
+    reg if_id_rs2_mul_pending_dep_r;
+    reg if_id_mul_waw_dep_r;
+    reg if_id_mul_order_dep_r;
+
+    always @(*) begin
+        mul_outstanding_count = {1'b0, mul_fifo_count};
+        if_id_rs1_mul_pending_dep_r = 1'b0;
+        if_id_rs2_mul_pending_dep_r = 1'b0;
+        if_id_mul_waw_dep_r = 1'b0;
+        if_id_mul_order_dep_r = 1'b0;
+
+        for (mul_comb_i = 0; mul_comb_i < MUL_META_DEPTH; mul_comb_i = mul_comb_i + 1) begin
+            if (mul_meta_valid_pipe[mul_comb_i]) begin
+                mul_outstanding_count = mul_outstanding_count + 5'd1;
+                if (!((mul_comb_i == (MUL_META_DEPTH - 1)) && mul_complete_to_wb && mul_retire_valid)) begin
+                    if (mul_meta_rd_pipe[mul_comb_i] != 5'd0) begin
+                        if (!((!dec_branch && !dec_jump) &&
+                              ((mul_comb_i == MUL_FORWARD_STAGE) ||
+                               ((MUL_STAGES == 1) && (mul_comb_i == 0)))) &&
+                            (mul_meta_rd_pipe[mul_comb_i] == dec_hazard_rs1)) begin
+                            if_id_rs1_mul_pending_dep_r = 1'b1;
+                        end
+                        if (!((!dec_branch && !dec_jump) &&
+                              ((mul_comb_i == MUL_FORWARD_STAGE) ||
+                               ((MUL_STAGES == 1) && (mul_comb_i == 0)))) &&
+                            (mul_meta_rd_pipe[mul_comb_i] == dec_hazard_rs2)) begin
+                            if_id_rs2_mul_pending_dep_r = 1'b1;
+                        end
+                        if (if_id_valid && dec_reg_write && (mul_meta_rd_pipe[mul_comb_i] == dec_rd)) begin
+                            if_id_mul_waw_dep_r = 1'b1;
+                        end
+                    end
+                    if_id_mul_order_dep_r = if_id_mul_order_dep_r || (if_id_valid && dec_csr_instr);
+                end
+            end
+        end
+
+        for (mul_comb_i = 0; mul_comb_i < MUL_FIFO_DEPTH; mul_comb_i = mul_comb_i + 1) begin
+            if (mul_fifo_valid[mul_comb_i] && !((mul_comb_i[2:0] == mul_fifo_head) && mul_retire_valid)) begin
+                if (mul_fifo_rd[mul_comb_i] != 5'd0) begin
+                    if (mul_fifo_rd[mul_comb_i] == dec_hazard_rs1) begin
+                        if_id_rs1_mul_pending_dep_r = 1'b1;
+                    end
+                    if (mul_fifo_rd[mul_comb_i] == dec_hazard_rs2) begin
+                        if_id_rs2_mul_pending_dep_r = 1'b1;
+                    end
+                    if (if_id_valid && dec_reg_write && (mul_fifo_rd[mul_comb_i] == dec_rd)) begin
+                        if_id_mul_waw_dep_r = 1'b1;
+                    end
+                end
+                if_id_mul_order_dep_r = if_id_mul_order_dep_r || (if_id_valid && dec_csr_instr);
+            end
+        end
+
+        if (mul_start) begin
+            if (id_ex_rd != 5'd0) begin
+                if (id_ex_rd == dec_hazard_rs1) begin
+                    if_id_rs1_mul_pending_dep_r = 1'b1;
+                end
+                if (id_ex_rd == dec_hazard_rs2) begin
+                    if_id_rs2_mul_pending_dep_r = 1'b1;
+                end
+                if (if_id_valid && dec_reg_write && (id_ex_rd == dec_rd)) begin
+                    if_id_mul_waw_dep_r = 1'b1;
+                end
+            end
+            if_id_mul_order_dep_r = if_id_mul_order_dep_r || (if_id_valid && dec_csr_instr);
+        end
+    end
+
+    assign mul_issue_ready = (mul_outstanding_count < MUL_FIFO_DEPTH_EXT) || mul_retire_valid;
+    assign mul_start = (FAST_MUL == 0) && id_ex_is_mul &&
+                       mul_issue_ready && !redirect_valid;
     wire mul_decode_pipeline_busy = (FAST_MUL == 0) &&
-                                    ((mul_busy && !mul_valid) || mul_resp_valid || mul_start);
+                                    ((mul_outstanding_count + (mul_start ? 5'd1 : 5'd0)) >= MUL_FIFO_DEPTH_EXT);
     wire if_id_control_load_replay = dec_branch || (dec_jump && dec_jalr);
     wire if_id_control_load_early_rs1_dep = if_id_valid &&
                                             id_ex_valid &&
@@ -345,27 +443,41 @@ module cpu_core #(
                                 ex_mem_valid &&
                                 ex_mem_reg_write &&
                                 (ex_mem_rd == dec_hazard_rs2);
-    wire if_id_rs1_mul_pending_dep = (dec_hazard_rs1 != 5'd0) &&
-                                     mul_scoreboard_valid &&
-                                     (mul_scoreboard_rd == dec_hazard_rs1);
-    wire if_id_rs2_mul_pending_dep = (dec_hazard_rs2 != 5'd0) &&
-                                     mul_scoreboard_valid &&
-                                     (mul_scoreboard_rd == dec_hazard_rs2);
-    wire if_id_load_base_inflight_dep = (if_id_load_rs1_q != 5'd0) &&
-                                        ((id_ex_valid && id_ex_reg_write && (id_ex_rd == if_id_load_rs1_q)) ||
-                                         (ex_mem_valid && ex_mem_reg_write && (ex_mem_rd == if_id_load_rs1_q)));
-    wire if_id_load_base_load_resp_dep = (if_id_load_rs1_q != 5'd0) &&
+    wire if_id_rs1_mul_pending_dep = (FAST_MUL == 0) &&
+                                     if_id_rs1_mul_pending_dep_r;
+    wire if_id_rs2_mul_pending_dep = (FAST_MUL == 0) &&
+                                     if_id_rs2_mul_pending_dep_r;
+    wire if_id_load_base_id_ex_dep = if_id_load_rs1_nonzero_q &&
+                                     id_ex_valid &&
+                                     id_ex_reg_write &&
+                                     (id_ex_rd == if_id_load_rs1_q);
+    wire if_id_load_base_id_ex_early_dep = if_id_load_base_id_ex_dep &&
+                                           id_ex_mem_read &&
+                                           id_ex_load_early_valid;
+    wire if_id_load_base_ex_mem_dep = if_id_load_rs1_nonzero_q &&
+                                      ex_mem_valid &&
+                                      ex_mem_reg_write &&
+                                      (ex_mem_rd == if_id_load_rs1_q);
+    wire if_id_load_base_ex_mem_early_dep = if_id_load_base_ex_mem_dep &&
+                                            ex_mem_mem_read &&
+                                            ex_mem_load_early_valid;
+    wire if_id_load_base_inflight_dep = if_id_load_base_id_ex_dep ||
+                                        (if_id_load_base_ex_mem_dep &&
+                                         !if_id_load_base_ex_mem_early_dep);
+    wire if_id_load_base_load_resp_dep = if_id_load_rs1_nonzero_q &&
                                          load_wb_write_en &&
                                          (load_resp_rd == if_id_load_rs1_q);
-    wire if_id_load_base_mem_wb_dep = (if_id_load_rs1_q != 5'd0) &&
+    wire if_id_load_base_mem_wb_dep = if_id_load_rs1_nonzero_q &&
                                       mem_wb_write_en &&
                                       (mem_wb_rd == if_id_load_rs1_q);
-    wire if_id_load_base_mul_resp_dep = (if_id_load_rs1_q != 5'd0) &&
+    wire if_id_load_base_mul_resp_dep = if_id_load_rs1_nonzero_q &&
                                         mul_resp_write_en &&
                                         (mul_resp_ready_rd == if_id_load_rs1_q);
+    wire ex_mem_dmem_port_busy = ex_mem_valid &&
+                                 ((ex_mem_mem_read && !ex_mem_load_early_valid) ||
+                                  ex_mem_mem_write);
     wire dmem_port_busy = (id_ex_valid && (id_ex_mem_read || id_ex_mem_write)) ||
-                          (ex_mem_valid && (ex_mem_mem_read || ex_mem_mem_write));
-    wire ex_mem_dmem_port_busy = ex_mem_valid && (ex_mem_mem_read || ex_mem_mem_write);
+                          ex_mem_dmem_port_busy;
     wire if_id_control_load_early_other_rs1_dep = !if_id_control_load_early_rs1_dep &&
                                                   (if_id_rs1_ex_mem_dep ||
                                                    if_id_rs1_mul_pending_dep);
@@ -396,12 +508,13 @@ module cpu_core #(
         .if_id_rd(dec_rd),
         .if_id_csr_instr(if_id_valid && dec_csr_instr),
         .if_id_is_mul(if_id_is_mul),
-        .if_id_conservative_load_use(dec_m_ext),
+        .if_id_conservative_load_use(dec_m_ext && (FAST_MUL != 0)),
         .if_id_control_load_replay(if_id_control_load_replay),
         .if_id_control_load_early_replay(if_id_control_load_early_replay),
-        .mul_pending_valid(mul_scoreboard_valid),
-        .mul_pending_rd(mul_scoreboard_rd),
-        .mul_pipeline_busy(mul_decode_pipeline_busy),
+        .if_id_mul_src_dep_i(if_id_rs1_mul_pending_dep || if_id_rs2_mul_pending_dep),
+        .if_id_mul_waw_dep_i((FAST_MUL == 0) && if_id_mul_waw_dep_r),
+        .if_id_mul_order_dep_i((FAST_MUL == 0) && if_id_mul_order_dep_r),
+        .if_id_mul_struct_dep_i(mul_decode_pipeline_busy && if_id_is_mul),
         .ex_mem_reg_write(ex_mem_valid && ex_mem_reg_write &&
                           !((ENABLE_LOAD_USE_STALL != 0) &&
                             ex_mem_mem_read &&
@@ -431,6 +544,34 @@ module cpu_core #(
     wire [31:0] ex_mem_forward_data = (ex_mem_mem_read && ex_mem_load_early_valid) ? ex_mem_load_early_data :
                                       ((ENABLE_LOAD_USE_STALL == 0) && ex_mem_mem_read) ? mem_load_data :
                                       ex_mem_alu_result;
+    wire if_id_m_ext_load_resp_dep = if_id_valid &&
+                                     dec_m_ext &&
+                                     load_wb_write_en &&
+                                     (load_resp_rd != 5'd0) &&
+                                     ((load_resp_rd == dec_hazard_rs1) ||
+                                      (load_resp_rd == dec_hazard_rs2));
+    wire m_ext_load_resp_forward_en = (FAST_MUL == 0);
+    wire ex_load_resp_forward_en = (ENABLE_LOAD_RESP_EX_FORWARD != 0) &&
+                                   (!id_ex_m_ext || m_ext_load_resp_forward_en);
+    wire mul_complete_forward_valid = (FAST_MUL == 0) &&
+                                      mul_complete_valid &&
+                                      mul_complete_reg_write &&
+                                      (mul_complete_rd != 5'd0);
+    wire mul_early_forward_valid = (FAST_MUL == 0) &&
+                                   (MUL_STAGES == 1) &&
+                                   mul_early_valid &&
+                                   mul_meta_valid_pipe[1] &&
+                                   mul_meta_reg_write_pipe[1] &&
+                                   (mul_meta_rd_pipe[1] != 5'd0);
+    wire [4:0] mul_early_forward_rd = mul_meta_rd_pipe[1];
+    wire mul_early_forward_a = mul_early_forward_valid &&
+                               (mul_early_forward_rd == id_ex_rs1);
+    wire mul_early_forward_b = mul_early_forward_valid &&
+                               (mul_early_forward_rd == id_ex_rs2);
+    wire mul_complete_forward_a = mul_complete_forward_valid &&
+                                  (mul_complete_rd == id_ex_rs1);
+    wire mul_complete_forward_b = mul_complete_forward_valid &&
+                                  (mul_complete_rd == id_ex_rs2);
     wire [31:0] replay_forward_a_data = (forward_a_sel == 2'd1) ? ex_mem_forward_data :
                                         (forward_a_sel == 2'd2) ? wb_data :
                                         (forward_a_sel == 2'd3) ? load_resp_forward_data :
@@ -441,18 +582,37 @@ module cpu_core #(
                                         id_ex_rs2_data;
     wire [31:0] forward_a_data = (forward_a_sel == 2'd1) ? ex_mem_forward_data :
                                  (forward_a_sel == 2'd2) ? wb_data :
-                                 ((forward_a_sel == 2'd3) && (ENABLE_LOAD_RESP_EX_FORWARD != 0)) ? load_resp_forward_data :
+                                 ((forward_a_sel == 2'd3) && ex_load_resp_forward_en) ? load_resp_forward_data :
+                                 mul_early_forward_a ? mul_early_result :
+                                 mul_complete_forward_a ? mul_result :
                                  id_ex_rs1_data;
     wire [31:0] forward_b_data = (forward_b_sel == 2'd1) ? ex_mem_forward_data :
                                  (forward_b_sel == 2'd2) ? wb_data :
-                                 ((forward_b_sel == 2'd3) && (ENABLE_LOAD_RESP_EX_FORWARD != 0)) ? load_resp_forward_data :
+                                 ((forward_b_sel == 2'd3) && ex_load_resp_forward_en) ? load_resp_forward_data :
+                                 mul_early_forward_b ? mul_early_result :
+                                 mul_complete_forward_b ? mul_result :
                                  id_ex_rs2_data;
+    wire [31:0] m_ext_forward_a_data = (forward_a_sel == 2'd1) ? ex_mem_forward_data :
+                                       (forward_a_sel == 2'd2) ? wb_data :
+                                       ((forward_a_sel == 2'd3) && m_ext_load_resp_forward_en) ? load_resp_forward_data :
+                                       mul_early_forward_a ? mul_early_result :
+                                       mul_complete_forward_a ? mul_result :
+                                       id_ex_rs1_data;
+    wire [31:0] m_ext_forward_b_data = (forward_b_sel == 2'd1) ? ex_mem_forward_data :
+                                       (forward_b_sel == 2'd2) ? wb_data :
+                                       ((forward_b_sel == 2'd3) && m_ext_load_resp_forward_en) ? load_resp_forward_data :
+                                       mul_early_forward_b ? mul_early_result :
+                                       mul_complete_forward_b ? mul_result :
+                                       id_ex_rs2_data;
     wire [31:0] alu_b = id_ex_alu_src_imm ? id_ex_imm : forward_b_data;
+    wire control_load_resp_forward_en = (ENABLE_LOAD_RESP_EX_FORWARD != 0);
     wire [31:0] control_forward_a_data = (forward_a_sel == 2'd1) ? ex_mem_forward_data :
                                          (forward_a_sel == 2'd2) ? wb_data :
+                                         ((forward_a_sel == 2'd3) && control_load_resp_forward_en) ? load_resp_forward_data :
                                          id_ex_rs1_data;
     wire [31:0] control_forward_b_data = (forward_b_sel == 2'd1) ? ex_mem_forward_data :
                                          (forward_b_sel == 2'd2) ? wb_data :
+                                         ((forward_b_sel == 2'd3) && control_load_resp_forward_en) ? load_resp_forward_data :
                                          id_ex_rs2_data;
     alu #(.XLEN(32)) u_alu (
         .a(forward_a_data),
@@ -462,15 +622,21 @@ module cpu_core #(
     );
 
     wire mul_wait = (FAST_MUL == 0) && id_ex_is_mul && !mul_start;
-    assign mul_complete_valid = (FAST_MUL == 0) && mul_pending_valid && mul_valid;
-    assign mul_resp_ready_valid = mul_resp_valid || mul_complete_valid;
-    assign mul_resp_ready_rd = mul_resp_valid ? mul_resp_rd : mul_pending_rd;
-    assign mul_resp_ready_data = mul_resp_valid ? mul_resp_data : mul_result;
-    assign mul_resp_ready_reg_write = mul_resp_valid ? mul_resp_reg_write : mul_pending_reg_write;
+    assign mul_complete_valid = (FAST_MUL == 0) &&
+                                mul_valid &&
+                                mul_meta_valid_pipe[MUL_META_DEPTH-1];
+    assign mul_resp_ready_valid = !mul_fifo_empty || mul_complete_valid;
+    assign mul_resp_ready_rd = !mul_fifo_empty ? mul_fifo_rd[mul_fifo_head] : mul_complete_rd;
+    assign mul_resp_ready_data = !mul_fifo_empty ? mul_fifo_data[mul_fifo_head] : mul_result;
+    assign mul_resp_ready_reg_write = !mul_fifo_empty ? mul_fifo_reg_write[mul_fifo_head] :
+                                      mul_complete_reg_write;
     assign mul_retire_valid = mul_resp_ready_valid && !load_wb_write_en;
     assign mul_resp_write_en = mul_retire_valid &&
                                mul_resp_ready_reg_write &&
                                (mul_resp_ready_rd != 5'd0);
+    wire mul_complete_bypass = mul_complete_valid && mul_fifo_empty && mul_retire_valid;
+    wire mul_fifo_pop = mul_retire_valid && !mul_fifo_empty;
+    wire mul_fifo_push = mul_complete_valid && !mul_complete_bypass;
     wire id_ex_is_div = id_ex_valid && id_ex_m_ext && id_ex_funct3[2];
     wire div_busy;
     wire div_valid;
@@ -488,9 +654,11 @@ module cpu_core #(
         .rst(rst),
         .start_i(mul_start),
         .funct3_i(id_ex_funct3),
-        .a_i(forward_a_data),
-        .b_i(forward_b_data),
+        .a_i(m_ext_forward_a_data),
+        .b_i(m_ext_forward_b_data),
         .busy_o(mul_busy),
+        .early_valid_o(mul_early_valid),
+        .early_result_o(mul_early_result),
         .valid_o(mul_valid),
         .result_o(mul_result)
     );
@@ -511,10 +679,10 @@ module cpu_core #(
     wire [31:0] fast_mul_result;
     generate
         if (FAST_MUL != 0) begin : gen_fast_mul_result
-            wire signed [63:0] fast_mul_product_ss = $signed(forward_a_data) * $signed(forward_b_data);
-            wire [63:0] fast_mul_product_uu = forward_a_data * forward_b_data;
-            wire signed [64:0] fast_mul_product_su = $signed({forward_a_data[31], forward_a_data}) *
-                                                     $signed({1'b0, forward_b_data});
+            wire signed [63:0] fast_mul_product_ss = $signed(m_ext_forward_a_data) * $signed(m_ext_forward_b_data);
+            wire [63:0] fast_mul_product_uu = m_ext_forward_a_data * m_ext_forward_b_data;
+            wire signed [64:0] fast_mul_product_su = $signed({m_ext_forward_a_data[31], m_ext_forward_a_data}) *
+                                                     $signed({1'b0, m_ext_forward_b_data});
             assign fast_mul_result = (id_ex_funct3 == 3'b000) ? fast_mul_product_ss[31:0] :
                                      (id_ex_funct3 == 3'b001) ? fast_mul_product_ss[63:32] :
                                      (id_ex_funct3 == 3'b010) ? fast_mul_product_su[63:32] :
@@ -541,6 +709,7 @@ module cpu_core #(
                                        !ctrl_replay_valid;
     wire control_load_resp_dep = id_ex_valid &&
                                  (id_ex_branch || (id_ex_jump && id_ex_jalr)) &&
+                                 !control_load_resp_forward_en &&
                                  ((forward_a_sel == 2'd3) ||
                                   (id_ex_branch && (forward_b_sel == 2'd3)));
     wire control_replay_capture = control_load_resp_dep && !pipe_wait && !redirect_valid;
@@ -582,10 +751,13 @@ module cpu_core #(
                                 redirect_taken_q ? redirect_pc_q :
                                 redirect_fallthrough_pc_q;
     wire ctrl_branch_target_mismatch = branch_target != ctrl_pred_target;
+    wire jump_target_mismatch = redirect_target_pc != ctrl_pred_target;
     wire branch_mispredict_raw = ctrl_valid && ctrl_branch &&
                                  (branch_taken ? (!ctrl_pred_taken || ctrl_branch_target_mismatch) :
                                                  ctrl_pred_taken);
-    wire jump_needs_flush_raw = take_jump && (ctrl_jalr || !ctrl_jump_early_redirect);
+    wire jump_needs_flush_raw = take_jump &&
+                                (ctrl_jalr ? (!ctrl_jump_early_redirect || jump_target_mismatch) :
+                                             !ctrl_jump_early_redirect);
     wire branch_mispredict_detect = !redirect_valid && !pipe_wait && branch_mispredict_raw;
     wire jump_needs_flush_detect = !redirect_valid && !pipe_wait && jump_needs_flush_raw;
     wire redirect_detect = branch_mispredict_detect || jump_needs_flush_detect;
@@ -594,6 +766,10 @@ module cpu_core #(
     wire jump_needs_flush = redirect_valid && redirect_jump_flush;
     wire flush = branch_mispredict || jump_needs_flush;
     assign replay_flush = flush && redirect_from_replay;
+    wire id_load_early_base_wait = if_id_valid &&
+                                   if_id_mem_read_q &&
+                                   if_id_load_base_id_ex_early_dep &&
+                                   !redirect_valid;
     wire control_conflict_stall = ctrl_replay_valid && id_ex_valid && (id_ex_branch || id_ex_jump);
     wire ctrl_pending_conflict_stall = ctrl_load_pending_valid &&
                                        if_id_valid &&
@@ -602,7 +778,8 @@ module cpu_core #(
                                         dec_m_ext ||
                                         dec_branch ||
                                         dec_jump);
-    wire fetch_stall = pipe_wait || hazard_stall || control_conflict_stall ||
+    wire fetch_stall = pipe_wait || hazard_stall || id_load_early_base_wait ||
+                       control_conflict_stall ||
                        ctrl_pending_conflict_stall;
     wire predict_taken;
     wire [31:0] predict_target;
@@ -611,6 +788,15 @@ module cpu_core #(
     wire id_jal_predicted_hit = if_id_valid && dec_jump && !dec_jalr &&
                                 if_id_pred_taken &&
                                 (if_id_pred_target == id_jal_target);
+    wire ras_valid = ras_count != 4'd0;
+    wire [2:0] ras_top_index = ras_count[2:0] - 3'd1;
+    wire [31:0] ras_top_target = ras_stack[ras_top_index];
+    wire dec_call = dec_jump && !dec_jalr &&
+                    ((dec_rd == 5'd1) || (dec_rd == 5'd5));
+    wire dec_return = dec_jump && dec_jalr &&
+                      (dec_rd == 5'd0) &&
+                      ((dec_rs1 == 5'd1) || (dec_rs1 == 5'd5)) &&
+                      (dec_imm == 32'h00000000);
     wire id_jal_redirect = if_id_valid && dec_jump && !dec_jalr &&
                            !pipe_wait &&
                            !hazard_stall &&
@@ -620,8 +806,29 @@ module cpu_core #(
                            !ctrl_replay_valid &&
                            !id_jal_predicted_hit &&
                            !flush;
-    wire id_jal_resolved_in_id = id_jal_redirect || id_jal_predicted_hit;
-    wire frontend_flush = flush || id_jal_redirect;
+    wire id_jalr_ras_redirect = if_id_valid && dec_return && ras_valid &&
+                                !pipe_wait &&
+                                !hazard_stall &&
+                                !control_conflict_stall &&
+                                !ctrl_pending_conflict_stall &&
+                                !ctrl_load_pending_valid &&
+                                !ctrl_replay_valid &&
+                                !flush;
+    wire id_jump_resolved_in_id = id_jal_redirect || id_jal_predicted_hit ||
+                                  id_jalr_ras_redirect;
+    wire frontend_flush = flush || id_jal_redirect || id_jalr_ras_redirect;
+    wire id_stage_accept = if_id_valid &&
+                           !flush &&
+                           !pipe_wait &&
+                           !load_control_early_capture &&
+                           !hazard_stall &&
+                           !id_load_early_base_wait &&
+                           !control_conflict_stall &&
+                           !ctrl_pending_conflict_stall &&
+                           !ctrl_load_pending_valid &&
+                           !ctrl_replay_valid;
+    wire ras_push = id_stage_accept && dec_call;
+    wire ras_pop = id_jalr_ras_redirect;
     wire id_load_early_read = (ENABLE_ID_LOAD_EARLY_READ != 0) &&
                               if_id_valid &&
                               if_id_mem_read_q &&
@@ -632,7 +839,8 @@ module cpu_core #(
                               !if_id_load_base_mul_pending_dep_q &&
                               !dmem_port_busy &&
                               !ctrl_load_pending_valid;
-    wire [31:0] id_load_early_base_data = (if_id_load_rs1_q == 5'd0) ? 32'h00000000 :
+    wire [31:0] id_load_early_base_data = !if_id_load_rs1_nonzero_q ? 32'h00000000 :
+                                          if_id_load_base_ex_mem_early_dep ? ex_mem_load_early_data :
                                           if_id_rs1_raw_data_q;
     wire [31:0] id_load_early_addr = id_load_early_base_data + if_id_load_imm_q;
 
@@ -647,7 +855,8 @@ module cpu_core #(
         .BHT_DEPTH(BP_BHT_DEPTH),
         .BHR_WIDTH(BP_BHR_WIDTH),
         .BTB_DEPTH(BP_BTB_DEPTH),
-        .LOCAL_HISTORY(BP_LOCAL_HISTORY)
+        .LOCAL_HISTORY(BP_LOCAL_HISTORY),
+        .INIT_TAKEN(BP_INIT_TAKEN)
     ) u_branch_predictor (
         .clk(clk),
         .rst(rst),
@@ -707,7 +916,8 @@ module cpu_core #(
         end
 
         imem_addr = pc;
-        dmem_read = (ex_mem_valid && ex_mem_mem_read) || id_load_early_read;
+        dmem_read = (ex_mem_valid && ex_mem_mem_read && !ex_mem_load_early_valid) ||
+                    id_load_early_read;
         dmem_read_early = id_load_early_read;
         dmem_write = ex_mem_valid && ex_mem_mem_write && !replay_flush;
         dmem_addr = ex_mem_dmem_port_busy ? ex_mem_alu_result :
@@ -729,6 +939,9 @@ module cpu_core #(
             if_id_pred_target <= 32'h00000004;
             if_id_valid <= 1'b0;
             if_id_mem_read_q <= 1'b0;
+            if_id_load_rs1_q <= 5'd0;
+            if_id_load_rs1_nonzero_q <= 1'b0;
+            if_id_load_imm_q <= 32'h00000000;
             id_ex_valid <= 1'b0;
             id_ex_pc <= 32'h00000000;
             id_ex_imm <= 32'h00000000;
@@ -777,13 +990,22 @@ module cpu_core #(
             load_resp_rd <= 5'd0;
             load_resp_funct3 <= 3'd0;
             load_resp_reg_write <= 1'b0;
-            mul_pending_valid <= 1'b0;
-            mul_pending_rd <= 5'd0;
-            mul_pending_reg_write <= 1'b0;
-            mul_resp_valid <= 1'b0;
-            mul_resp_rd <= 5'd0;
-            mul_resp_data <= 32'h00000000;
-            mul_resp_reg_write <= 1'b0;
+            load_resp_early_valid <= 1'b0;
+            load_resp_early_data <= 32'h00000000;
+            mul_meta_valid_pipe <= {MUL_META_DEPTH{1'b0}};
+            for (mul_seq_i = 0; mul_seq_i < MUL_META_DEPTH; mul_seq_i = mul_seq_i + 1) begin
+                mul_meta_rd_pipe[mul_seq_i] <= 5'd0;
+                mul_meta_reg_write_pipe[mul_seq_i] <= 1'b0;
+            end
+            mul_fifo_valid <= {MUL_FIFO_DEPTH{1'b0}};
+            mul_fifo_head <= 3'd0;
+            mul_fifo_tail <= 3'd0;
+            mul_fifo_count <= 4'd0;
+            for (mul_seq_i = 0; mul_seq_i < MUL_FIFO_DEPTH; mul_seq_i = mul_seq_i + 1) begin
+                mul_fifo_rd[mul_seq_i] <= 5'd0;
+                mul_fifo_data[mul_seq_i] <= 32'h00000000;
+                mul_fifo_reg_write[mul_seq_i] <= 1'b0;
+            end
             div_cmd_valid <= 1'b0;
             div_cmd_rs1_data <= 32'h00000000;
             div_cmd_rs2_data <= 32'h00000000;
@@ -823,31 +1045,49 @@ module cpu_core #(
             ctrl_load_pending_rs2_from_load <= 1'b0;
             ctrl_load_pending_load_rd <= 5'd0;
             ctrl_load_pending_wait_resp <= 1'b0;
+            ras_count <= 4'd0;
+            for (ras_i = 0; ras_i < 8; ras_i = ras_i + 1) begin
+                ras_stack[ras_i] <= 32'h00000000;
+            end
         end else begin
             if_id_load_base_mul_pending_dep_q <= if_id_rs1_mul_pending_dep;
 
-            if (mul_retire_valid && mul_resp_valid) begin
-                mul_resp_valid <= 1'b0;
-                mul_resp_rd <= 5'd0;
-                mul_resp_data <= 32'h00000000;
-                mul_resp_reg_write <= 1'b0;
-            end
-            if (mul_complete_valid) begin
-                mul_pending_valid <= 1'b0;
-                mul_pending_rd <= 5'd0;
-                mul_pending_reg_write <= 1'b0;
-                if (!mul_retire_valid) begin
-                    mul_resp_valid <= 1'b1;
-                    mul_resp_rd <= mul_pending_rd;
-                    mul_resp_data <= mul_result;
-                    mul_resp_reg_write <= mul_pending_reg_write;
+            if (ras_pop) begin
+                ras_count <= ras_count - 4'd1;
+            end else if (ras_push) begin
+                if (ras_count != 4'd8) begin
+                    ras_stack[ras_count[2:0]] <= if_id_pc + 32'd4;
+                    ras_count <= ras_count + 4'd1;
+                end else begin
+                    ras_stack[3'd7] <= if_id_pc + 32'd4;
                 end
             end
-            if (mul_start) begin
-                mul_pending_valid <= 1'b1;
-                mul_pending_rd <= id_ex_rd;
-                mul_pending_reg_write <= id_ex_reg_write;
+
+            mul_meta_valid_pipe[0] <= mul_start;
+            mul_meta_rd_pipe[0] <= id_ex_rd;
+            mul_meta_reg_write_pipe[0] <= id_ex_reg_write;
+            for (mul_seq_i = 1; mul_seq_i < MUL_META_DEPTH; mul_seq_i = mul_seq_i + 1) begin
+                mul_meta_valid_pipe[mul_seq_i] <= mul_meta_valid_pipe[mul_seq_i-1];
+                mul_meta_rd_pipe[mul_seq_i] <= mul_meta_rd_pipe[mul_seq_i-1];
+                mul_meta_reg_write_pipe[mul_seq_i] <= mul_meta_reg_write_pipe[mul_seq_i-1];
             end
+
+            if (mul_fifo_pop) begin
+                mul_fifo_valid[mul_fifo_head] <= 1'b0;
+                mul_fifo_head <= mul_fifo_head + 3'd1;
+            end
+            if (mul_fifo_push) begin
+                mul_fifo_valid[mul_fifo_tail] <= 1'b1;
+                mul_fifo_rd[mul_fifo_tail] <= mul_complete_rd;
+                mul_fifo_data[mul_fifo_tail] <= mul_result;
+                mul_fifo_reg_write[mul_fifo_tail] <= mul_complete_reg_write;
+                mul_fifo_tail <= mul_fifo_tail + 3'd1;
+            end
+            case ({mul_fifo_push, mul_fifo_pop})
+                2'b10: mul_fifo_count <= mul_fifo_count + 4'd1;
+                2'b01: mul_fifo_count <= mul_fifo_count - 4'd1;
+                default: mul_fifo_count <= mul_fifo_count;
+            endcase
 
             if (flush) begin
                 div_cmd_valid <= 1'b0;
@@ -856,8 +1096,8 @@ module cpu_core #(
                 div_cmd_funct3 <= 3'd0;
             end else if (div_launch) begin
                 div_cmd_valid <= 1'b1;
-                div_cmd_rs1_data <= forward_a_data;
-                div_cmd_rs2_data <= forward_b_data;
+                div_cmd_rs1_data <= m_ext_forward_a_data;
+                div_cmd_rs2_data <= m_ext_forward_b_data;
                 div_cmd_funct3 <= id_ex_funct3;
             end else if (div_start) begin
                 div_cmd_valid <= 1'b0;
@@ -936,6 +1176,11 @@ module cpu_core #(
             load_resp_rd <= ex_mem_rd;
             load_resp_funct3 <= ex_mem_funct3;
             load_resp_reg_write <= ex_mem_reg_write;
+            load_resp_early_valid <= !replay_flush &&
+                                     ex_mem_valid &&
+                                     ex_mem_mem_read &&
+                                     ex_mem_load_early_valid;
+            load_resp_early_data <= ex_mem_load_early_data;
 
             mem_wb_valid <= !replay_flush && ex_mem_valid && !ex_mem_mem_read;
             mem_wb_alu_result <= ex_mem_alu_result;
@@ -1021,6 +1266,7 @@ module cpu_core #(
                 id_ex_rs2_data <= forward_b_data;
                 id_ex_load_early_valid <= id_ex_load_early_valid;
             end else if (load_control_early_capture || hazard_stall ||
+                         id_load_early_base_wait ||
                          ctrl_pending_conflict_stall) begin
                 id_ex_valid <= 1'b0;
                 id_ex_reg_write <= 1'b0;
@@ -1053,12 +1299,12 @@ module cpu_core #(
                 id_ex_branch <= dec_branch && if_id_valid;
                 id_ex_jump <= dec_jump && if_id_valid;
                 id_ex_jalr <= dec_jalr;
-                id_ex_jump_early_redirect <= id_jal_resolved_in_id;
+                id_ex_jump_early_redirect <= id_jump_resolved_in_id;
                 id_ex_csr_instr <= dec_csr_instr && if_id_valid;
                 id_ex_csr_addr <= if_id_instr[31:20];
                 id_ex_m_ext <= dec_m_ext && if_id_valid;
                 id_ex_pred_taken <= if_id_pred_taken && if_id_valid;
-                id_ex_pred_target <= if_id_pred_target;
+                id_ex_pred_target <= id_jalr_ras_redirect ? ras_top_target : if_id_pred_target;
                 id_ex_load_early_valid <= id_load_early_read;
             end
 
@@ -1072,12 +1318,15 @@ module cpu_core #(
                 if_id_instr <= 32'h00000013;
                 if_id_pred_taken <= 1'b0;
                 if_id_pred_target <= 32'h00000004;
-            if_id_valid <= 1'b0;
-            if_id_mem_read_q <= 1'b0;
-            if_id_load_rs1_q <= 5'd0;
-            if_id_load_imm_q <= 32'h00000000;
-            if_id_rs1_raw_data_q <= 32'h00000000;
-            end else if (pipe_wait || control_conflict_stall || ctrl_pending_conflict_stall) begin
+                if_id_valid <= 1'b0;
+                if_id_mem_read_q <= 1'b0;
+                if_id_load_rs1_q <= 5'd0;
+                if_id_load_rs1_nonzero_q <= 1'b0;
+                if_id_load_imm_q <= 32'h00000000;
+                if_id_rs1_raw_data_q <= 32'h00000000;
+            end else if (pipe_wait || control_conflict_stall ||
+                         ctrl_pending_conflict_stall ||
+                         id_load_early_base_wait) begin
                 pc <= pc;
                 fetch_pc_q <= fetch_pc_q;
                 fetch_valid_q <= fetch_valid_q;
@@ -1090,10 +1339,11 @@ module cpu_core #(
                 if_id_valid <= if_id_valid;
                 if_id_mem_read_q <= if_id_mem_read_q;
                 if_id_load_rs1_q <= if_id_load_rs1_q;
+                if_id_load_rs1_nonzero_q <= if_id_load_rs1_nonzero_q;
                 if_id_load_imm_q <= if_id_load_imm_q;
                 if_id_rs1_raw_data_q <= if_id_rs1_raw_hold_data;
-            end else if (id_jal_redirect) begin
-                pc <= id_jal_target;
+            end else if (id_jal_redirect || id_jalr_ras_redirect) begin
+                pc <= id_jalr_ras_redirect ? ras_top_target : id_jal_target;
                 fetch_pc_q <= 32'h00000000;
                 fetch_valid_q <= 1'b0;
                 fetch_pred_taken_q <= 1'b0;
@@ -1105,6 +1355,7 @@ module cpu_core #(
                 if_id_valid <= 1'b0;
                 if_id_mem_read_q <= 1'b0;
                 if_id_load_rs1_q <= 5'd0;
+                if_id_load_rs1_nonzero_q <= 1'b0;
                 if_id_load_imm_q <= 32'h00000000;
                 if_id_rs1_raw_data_q <= 32'h00000000;
             end else if (!hazard_stall) begin
@@ -1120,11 +1371,13 @@ module cpu_core #(
                 if_id_valid <= prefetch_valid;
                 if_id_mem_read_q <= prefetch_valid && prefetch_mem_read;
                 if_id_load_rs1_q <= (prefetch_valid && prefetch_mem_read) ? prefetch_rs1 : 5'd0;
+                if_id_load_rs1_nonzero_q <= prefetch_valid && prefetch_mem_read && (prefetch_rs1 != 5'd0);
                 if_id_load_imm_q <= (prefetch_valid && prefetch_mem_read) ? prefetch_load_imm : 32'h00000000;
                 if_id_rs1_raw_data_q <= prefetch_valid ? rf_prefetch_rs1_data : 32'h00000000;
             end else begin
                 if_id_mem_read_q <= if_id_mem_read_q;
                 if_id_load_rs1_q <= if_id_load_rs1_q;
+                if_id_load_rs1_nonzero_q <= if_id_load_rs1_nonzero_q;
                 if_id_load_imm_q <= if_id_load_imm_q;
                 if_id_rs1_raw_data_q <= if_id_rs1_raw_hold_data;
             end

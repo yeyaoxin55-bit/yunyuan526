@@ -868,3 +868,81 @@
 - After the initial commit, `coremark` reported an untracked legacy `riscv_port/` directory. The active build scripts use `sw/coremark_port/`, so `.gitmodules` was adjusted to ignore untracked files inside the `coremark` submodule rather than adding stale local port files to the repository.
 - Added GitHub remote `origin = https://github.com/yeyaoxin55-bit/yunyuan526.git`.
 - Pushed `main` to GitHub. Current remote-tracking state after push: `b4654af (HEAD -> main, origin/main) Initial project import`.
+
+## CoreMark 3.2 Optimization Restart
+- Restored the tree to the clean `origin/main` RTL after rejecting the temporary dual-load control-replay experiment.
+- Rejection reason: the directed test passed, but CoreMark 2 with `FAST_MUL=1`, `BHT=256`, `BHR=4`, `BTB=128` worsened from the prior `644845` cycles to `645041` cycles while load-use stalls dropped by only 10. The extra control-state logic is therefore not worth keeping, especially with timing still a constraint.
+- Current clean comparison point to beat: `FAST_MUL=1`, `MUL_STAGES=1`, `ENABLE_LOAD_RESP_EX_FORWARD=1`, `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1`, `ENABLE_ID_LOAD_EARLY_READ=1`, `BHT=256`, `BHR=4`, `BTB=128`, local history enabled, CoreMark 2 at `644845` cycles (`~3.102 CoreMark/MHz` at 100 MHz). Target 3.2 requires `<=625000` cycles for this 2-iteration setup.
+
+## No-BHR Predictor Experiment
+- User requested testing a branch predictor with BHR/local history completely disabled because BHR/PHT pressure is high for timing and resources.
+- Added a parameterized predictor cold-start option:
+  - `branch_predictor.INIT_TAKEN`
+  - surfaced as `BP_INIT_TAKEN` through `cpu_core`, `cpu_top`, `soc_top`, `fpga_coremark_top`, `tb_external_program`, `scripts/run_external_modelsim.ps1`, and `scripts/run_coremark.ps1`
+  - defaults to 0, preserving existing predictor behavior
+  - new regression `tb_branch_predictor_init_taken.v`
+- Verification:
+  - `scripts/check_project.ps1`: pass
+  - `scripts/check_bp_resource_profile.ps1`: pass
+  - `tb_branch_predictor`: pass with default init
+  - `tb_branch_predictor_init_taken`: pass with explicit init-taken
+- CoreMark 2 no-BHR scan, all with `FAST_MUL=0`, load response forwarding, load-control early replay, and ID load early read enabled:
+  - `BHT256/BTB128/init0`: `635536`
+  - `BHT256/BTB128/init1`: `632276`
+  - `BHT256/BTB256/init1`: `630750`
+  - `BHT512/BTB256/init1`: `630530`
+  - `BHT1024/BTB512/init1`: `630231`
+  - `BHT1024/BTB1024/init1`: `630043`
+- Best no-BHR result is still above the 3.2 threshold of `625000` cycles; score is about `3.174 CoreMark/MHz`.
+- Synthesis:
+  - reasonable no-BHR `BHT512/BTB256/init1`: WNS `-2.348 ns`, LUT `12962`, FF `22163`, BRAM36 `24`, DSP `12`, worst path still DMEM BRAM output to `redirect_valid`
+  - oversized no-BHR `BHT1024/BTB1024/init1`: WNS `-3.323 ns`, LUT `31383`, FF `74727`, very high MUXF pressure, not viable
+- Decision: no-BHR is useful for reducing predictor complexity, but by itself cannot meet the 3.2 performance target. The next performance work should not rely on larger no-BHR BTB/BHT; it should target the remaining load-use/redirect path.
+
+## CoreMark 3.0 Hard-Target Closure
+- The target was revised to a hard `CoreMark/MHz >= 3.0`, `Slice LUTs < 9000`, and 100 MHz post-route timing clean.
+- The selected compromise is not the fully no-BHR point. Fully disabling local history lowers predictor complexity, but either loses too much CoreMark performance at practical sizes or still leaves difficult timing/resource pressure when oversized.
+- The selected point keeps only a tiny local-history predictor:
+  - `BP_LOCAL_HISTORY=1`
+  - `BP_BHT_DEPTH=64`
+  - `BP_BHR_WIDTH=2`
+  - `BP_BTB_DEPTH=64`
+  - `BP_INIT_TAKEN=0`
+  - load-response EX forwarding enabled
+  - load-control early replay and ID load early read disabled
+- CoreMark verification with `scripts/run_coremark.ps1`:
+  - `COREMARK_RESULT_CYCLES=650534`
+  - `COREMARK_CPI=1.111788`
+  - `COREMARK_RETIRED=585124`
+  - `COREMARK_LOAD_USE_STALLS=36757`
+  - `COREMARK_BRANCH_MISPREDICT_FLUSHES=7753`
+  - ModelSim compile/run errors and warnings: `0`
+  - 100 MHz score estimate: `2000000 / 650534 = 3.074 CoreMark/MHz`
+- Memory footprint remains comfortably inside the configured memories:
+  - IMEM: `25592 B / 64 KB`
+  - DMEM: `3948 B / 32 KB`
+- Vivado implementation path:
+  - route from the selected placement with `AdvancedSkewModeling` first reached WNS `-0.020 ns`;
+  - a second post-route `phys_opt_design -directive AggressiveExplore` was run with `scripts/vivado_physopt_from_route.tcl`;
+  - final artifact: `build/vivado_physopt_soc_top_coremark30_lhr64_bhr2_btb64_lctrl0_idread0_adv_skew_pass2/soc_top_physopt.bit`.
+- Final post-route physopt result:
+  - setup WNS `0.000 ns`
+  - setup TNS `0.000 ns`
+  - setup failing endpoints `0`
+  - hold WHS `0.034 ns`
+  - Slice LUTs `6800`
+  - Slice Registers `8278`
+  - RAMB36 `24`
+  - DSP `12`
+  - RAMD64E `16`
+- The worst setup path is still marginal:
+  - source `u_core/u_multiplier/product_su_q_reg[12]/C`
+  - destination `u_core/ex_mem_alu_result_reg[0]/D`
+  - data path delay `9.972 ns`
+  - logic levels `17`
+- Decision: keep this as the current board candidate for the revised 3.0 hard target. Because the timing margin is exactly 0 ps, further work should first add timing margin on the multiplier-to-EX/MEM result path or nearby placement before chasing more performance.
+
+## Post-Route Physopt Resume Helper
+- Added `scripts/vivado_physopt_from_route.tcl`.
+- The helper opens an existing routed checkpoint in an output directory, runs another post-route `phys_opt_design`, writes `post_route_physopt.dcp`, emits timing/utilization reports, and writes a physopt bitstream.
+- It was used to turn the best `AdvancedSkewModeling` routed result from WNS `-0.020 ns` into the selected WNS `0.000 ns` artifact.
