@@ -955,3 +955,13 @@
 - Added `scripts/vivado_physopt_from_route.tcl`.
 - The helper opens an existing routed checkpoint in an output directory, runs another post-route `phys_opt_design`, writes `post_route_physopt.dcp`, emits timing/utilization reports, and writes a physopt bitstream.
 - It was used to turn the best `AdvancedSkewModeling` routed result from WNS `-0.020 ns` into the selected WNS `0.000 ns` artifact.
+
+# 2026-05-22 RV64 default CoreMark smoke
+
+- Switched the engineering default XLEN to 64 in `cpu_top`, `soc_top`, and `fpga_coremark_top`; legacy RV32 UART/SOC tests now explicitly override `XLEN=32`.
+- Parameterized external program simulation with `-XLEN` and fixed pass/fail/result polling so the harness reads 32-bit result words correctly from both 32-bit and 64-bit DMEM arrays.
+- Added an RV64 linker script and reserved the top of DMEM away from the stack so CoreMark result words at `0x00017ff0`/`0x00017ff4`/`0x00017ff8` no longer collide with RV64 saved registers.
+- Fixed `crt0.S` GP initialization with `.option norelax`; without this, RV64 linker relaxation folded `la gp, __global_pointer$` into `mv gp,gp` and broke gp-relative data/jump-table access.
+- Parameterized CoreMark build and ELF-to-hex conversion for RV32/RV64, with RV64 defaulting to `rv64im`/`lp64` and 8-byte DMEM hex words.
+- RV64 CoreMark smoke passed in ModelSim: `TOTAL_DATA_SIZE=1200`, `ITERATIONS=1`, `COREMARK_SIM_CYCLE=172327`, `COREMARK_RESULT_CYCLES=159633`.
+- Remaining FPGA phase: UART loader/download must be made RV64-DMEM-aware because the board protocol still transfers 32-bit words while the default DMEM word is now 64-bit.
