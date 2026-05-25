@@ -2,10 +2,7 @@
     .globl _start
 _start:
     la sp, __stack_top
-    .option push
-    .option norelax
     la gp, __global_pointer$
-    .option pop
 
     la t0, __bss_start
     la t1, __bss_end

@@ -63,16 +63,9 @@ $required = @(
   "constraints/floorplan_soc_top_light.tcl",
   "scripts/send_uart_image.ps1",
   "sw/linker/yl3_rv32im.ld",
-  "sw/linker/yl3_rv64im.ld",
   "sw/runtime/crt0.S",
   "sw/runtime/yl3_platform.h",
-  "sw/riscv-tests-env/riscv_test.h",
-  "coremark/coremark.h",
-  "coremark/core_main.c",
-  "coremark/core_list_join.c",
-  "coremark/core_matrix.c",
-  "coremark/core_state.c",
-  "coremark/core_util.c"
+  "sw/riscv-tests-env/riscv_test.h"
 )
 
 $missing = @()

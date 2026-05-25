@@ -4,8 +4,6 @@ param(
   [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
   [string]$March = "rv32im_zifencei",
   [string]$Mabi = "ilp32",
-  [ValidateSet(32, 64)]
-  [int]$XLEN = 32,
   [int]$MaxCycles = 200000,
   [int]$MulStages = 1,
   [int]$FastMul = 1,
@@ -47,8 +45,7 @@ $objcopy = ($objcopyLine -replace "^OBJCOPY=", "").Trim()
 $hexOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\convert_elf_to_hex.ps1") `
   -Elf $elf `
   -Objcopy $objcopy `
-  -OutDir (Join-Path $repoRoot "build\riscv-tests\hex") `
-  -DMemWordBytes ($XLEN / 8) 2>&1
+  -OutDir (Join-Path $repoRoot "build\riscv-tests\hex") 2>&1
 $hexOutput
 if ($LASTEXITCODE -ne 0) {
   throw "ELF to hex conversion failed"
@@ -66,7 +63,6 @@ $simArgs = @(
   "-IMemHex", $imem,
   "-DMemHex", $dmem,
   "-MaxCycles", $MaxCycles,
-  "-XLEN", $XLEN,
   "-DMemBase", 65536,
   "-PassAddr", 98288,
   "-FailAddr", 98292,

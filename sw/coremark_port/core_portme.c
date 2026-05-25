@@ -1,5 +1,5 @@
 /*
- * CoreMark baremetal port for the YL3 RV32IM/RV64IM harness.
+ * CoreMark baremetal port for the YL3 RV32IM ModelSim harness.
  */
 #include <stdarg.h>
 #include "coremark.h"

@@ -1,5 +1,5 @@
 module cpu_top #(
-    parameter XLEN = 64,
+    parameter XLEN = 32,
     parameter IMEM_DEPTH = 16384,
     parameter DMEM_DEPTH = 8192,
     parameter DMEM_BASE = 32'h00000000,

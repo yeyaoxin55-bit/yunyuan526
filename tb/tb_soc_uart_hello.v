@@ -18,7 +18,6 @@ module tb_soc_uart_hello;
     integer wait_count;
 
     soc_top #(
-        .XLEN(32),
         .IMEM_DEPTH(256),
         .DMEM_DEPTH(256),
         .IMEM_INIT_FILE("sw/uart_hello/uart_hello.hex"),

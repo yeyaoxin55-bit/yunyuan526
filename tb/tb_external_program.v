@@ -1,7 +1,6 @@
 `timescale 1ns/1ps
 
 module tb_external_program;
-    parameter XLEN = 64;
     parameter IMEM_DEPTH = 16384;
     parameter DMEM_DEPTH = 8192;
     parameter DMEM_BASE = 32'h00010000;
@@ -107,10 +106,9 @@ module tb_external_program;
     wire [31:0] debug_dmem_word2;
     wire [31:0] debug_dmem_word3;
     wire [31:0] debug_dmem_word4;
-    localparam TB_DMEM_WORD_SHIFT = (XLEN == 64) ? 3 : 2;
 
     cpu_top #(
-        .XLEN(XLEN),
+        .XLEN(32),
         .IMEM_DEPTH(IMEM_DEPTH),
         .DMEM_DEPTH(DMEM_DEPTH),
         .DMEM_BASE(DMEM_BASE),
@@ -142,25 +140,6 @@ module tb_external_program;
         clk = 1'b0;
         forever #5 clk = ~clk;
     end
-
-    function [31:0] read_dmem_word32;
-        input [31:0] byte_addr;
-        reg [31:0] rel_addr;
-        reg [31:0] word_index;
-        reg [2:0] byte_offset;
-        reg [XLEN-1:0] word0;
-        reg [XLEN-1:0] word1;
-        reg [(2*XLEN)-1:0] read_window;
-        begin
-            rel_addr = byte_addr - DMEM_BASE;
-            word_index = rel_addr >> TB_DMEM_WORD_SHIFT;
-            byte_offset = (XLEN == 64) ? rel_addr[2:0] : {1'b0, rel_addr[1:0]};
-            word0 = (word_index < DMEM_DEPTH) ? dut.u_dmem.mem[word_index] : {XLEN{1'b0}};
-            word1 = ((word_index + 1) < DMEM_DEPTH) ? dut.u_dmem.mem[word_index + 1] : {XLEN{1'b0}};
-            read_window = {word1, word0} >> (8 * byte_offset);
-            read_dmem_word32 = read_window[31:0];
-        end
-    endfunction
 
     initial begin
         if (!$value$plusargs("IMEM_HEX=%s", imem_hex)) begin
@@ -503,8 +482,8 @@ module tb_external_program;
                     dut.u_core.dmem_write,
                     dut.u_core.dmem_addr,
                     dut.u_core.dmem_wdata,
-                    read_dmem_word32(pass_addr[31:0]),
-                    read_dmem_word32(fail_addr[31:0]));
+                    dut.u_dmem.mem[pass_index],
+                    dut.u_dmem.mem[fail_index]);
             end
             if (replay_trace != 0 && cycle >= replay_trace_start && cycle <= replay_trace_end) begin
                 if (dut.u_core.load_control_early_capture ||
@@ -555,10 +534,10 @@ module tb_external_program;
                     dut.u_core.redirect_detect,
                     dut.u_core.flush);
             end
-            if (read_dmem_word32(fail_addr[31:0]) != 32'h00000000) begin
+            if (dut.u_dmem.mem[fail_index] != 32'h00000000) begin
                 $display("FAIL external: fail marker at cycle %0d value=%08x exmem_pc=%08x exmem_rd=%0d exmem_mem_write=%b exmem_addr=%08x idex_pc=%08x ifid_pc=%08x",
                     cycle,
-                    read_dmem_word32(fail_addr[31:0]),
+                    dut.u_dmem.mem[fail_index],
                     dut.u_core.ex_mem_pc4 - 32'd4,
                     dut.u_core.ex_mem_rd,
                     dut.u_core.ex_mem_mem_write,
@@ -567,7 +546,7 @@ module tb_external_program;
                     dut.u_core.if_id_pc);
                 $finish;
             end
-            if (read_dmem_word32(pass_addr[31:0]) == pass_value[31:0]) begin
+            if (dut.u_dmem.mem[pass_index] == pass_value[31:0]) begin
                 if (perf_stats != 0) begin
                     $display("PERF_STATS retired=%0d loads=%0d stores=%0d branches=%0d jumps=%0d muls=%0d divs=%0d load_use_stalls=%0d exec_wait_stalls=%0d mem_wait_stalls=%0d mul_wait_stalls=%0d div_wait_stalls=%0d flushes=%0d branch_mispredict_flushes=%0d jump_flushes=%0d jal_flushes=%0d jalr_flushes=%0d jal_early_redirects=%0d taken_branches=%0d not_taken_branches=%0d pred_taken_branches=%0d",
                         perf_retired,
@@ -624,7 +603,7 @@ module tb_external_program;
                     end
                 end
                 if (result_addr != 0) begin
-                    $display("PASS external program completed cycle=%0d result=%08x", cycle, read_dmem_word32(result_addr[31:0]));
+                    $display("PASS external program completed cycle=%0d result=%08x", cycle, dut.u_dmem.mem[result_index]);
                 end else begin
                     $display("PASS external program completed cycle=%0d", cycle);
                 end
@@ -633,7 +612,9 @@ module tb_external_program;
         end
 
         $display("FAIL external: timeout pass[%0d]=%08x fail[%0d]=%08x",
-            pass_index, read_dmem_word32(pass_addr[31:0]), fail_index, read_dmem_word32(fail_addr[31:0]));
+            pass_index, dut.u_dmem.mem[pass_index], fail_index, dut.u_dmem.mem[fail_index]);
         $finish;
     end
 endmodule
+
+

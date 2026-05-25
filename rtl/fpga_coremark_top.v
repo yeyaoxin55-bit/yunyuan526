@@ -1,5 +1,5 @@
 module fpga_coremark_top #(
-    parameter XLEN = 64,
+    parameter XLEN = 32,
     parameter IMEM_INIT_FILE = "build/coremark/fpga/coremark.imem.hex",
     parameter DMEM_INIT_FILE = "build/coremark/fpga/coremark.dmem.hex",
     parameter MUL_STAGES = 1,
