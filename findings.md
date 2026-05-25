@@ -429,3 +429,22 @@
 - The synth screen stayed at `-1.723 ns`, and the full post-route trial worsened to WNS `-0.572 ns`.
 - The rejected result indicates Vivado's placement/routing around the current branch/redirect cone is very sensitive. Small stylistic compare rewrites are not reliable closure moves at this point.
 - Keep the new `vivado_impl_from_opt.tcl` helper; it successfully resumed from `post_opt.dcp` and avoided re-running synthesis during implementation experiments.
+
+## No-BHR Predictor Finding
+- Disabling local history/BHR removes the PHT/BHR structures, but CoreMark loses about 5k-10k cycles compared with the best local-history points.
+- `BP_INIT_TAKEN=1` is worth keeping as an optional generic. With no BHR, it improves CoreMark 2 by roughly 3k cycles because learned BTB targets become taken sooner, while the default remains unchanged for baseline regressions.
+- The best no-BHR performance found so far is `BHT1024/BTB1024/init_taken=1` at `630043` cycles, still short of the `625000` cycle requirement for 3.2 CoreMark/MHz.
+- A reasonable no-BHR point, `BHT512/BTB256/init_taken=1`, uses fewer predictor features but synthesizes to WNS `-2.348 ns`; the worst path is still DMEM BRAM output to `redirect_valid`, not the BHR/PHT cone.
+- Oversizing the no-BHR BTB/BHT is counterproductive. `BHT1024/BTB1024/init_taken=1` only improves cycles to `630043`, but explodes to LUT `31383`, FF `74727`, and WNS `-3.323 ns`.
+- Recommendation: use no-BHR as a resource/timing fallback, not the 3.2 performance path. For 3.2 with timing, keep the predictor moderate and move the next optimization to the load-use/redirect datapath.
+
+## CoreMark 3.0 Hard-Target Closure Finding
+- A fully no-BHR predictor is not the best final answer for the revised target. It can reduce predictor structure, but practical no-BHR configurations either do not keep enough performance margin or still fail timing/resource screens when the BHT/BTB is enlarged.
+- A very small local-history predictor is the better compromise:
+  - `BHT64/BHR2/BTB64`
+  - `RAMD64E=16`
+  - LUT `6800`
+  - CoreMark 2 `650534` cycles, about `3.074 CoreMark/MHz`
+  - post-route physopt WNS `0.000 ns`
+- The high-risk performance features for this hard target are still ID load early read and load-control early replay. They help cycles, but have repeatedly exposed DMEM/redirect timing paths that are too expensive for a clean 100 MHz board candidate.
+- The current selected bitstream meets all revised hard targets, but has no setup slack margin. Treat it as timing-clean but fragile. The next useful optimization should add margin on the current multiplier-to-EX/MEM result path before increasing predictor size or re-enabling aggressive load-use features.

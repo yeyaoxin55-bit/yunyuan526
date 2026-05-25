@@ -14,6 +14,7 @@ module tb_external_program;
     parameter BP_BHR_WIDTH = 3;
     parameter BP_BTB_DEPTH = 64;
     parameter BP_LOCAL_HISTORY = 1;
+    parameter BP_INIT_TAKEN = 0;
 
     reg clk;
     reg rst;
@@ -42,6 +43,12 @@ module tb_external_program;
     integer perf_muls;
     integer perf_divs;
     integer perf_load_use_stalls;
+    integer perf_hazard_id_ex_load_stalls;
+    integer perf_hazard_ex_mem_load_stalls;
+    integer perf_hazard_mul_src_stalls;
+    integer perf_hazard_mul_waw_stalls;
+    integer perf_hazard_mul_order_stalls;
+    integer perf_hazard_mul_struct_stalls;
     integer perf_exec_wait_stalls;
     integer perf_mem_wait_stalls;
     integer perf_mul_wait_stalls;
@@ -121,6 +128,7 @@ module tb_external_program;
         .BP_BHR_WIDTH(BP_BHR_WIDTH),
         .BP_BTB_DEPTH(BP_BTB_DEPTH),
         .BP_LOCAL_HISTORY(BP_LOCAL_HISTORY),
+        .BP_INIT_TAKEN(BP_INIT_TAKEN),
         .IMEM_INIT_FILE(""),
         .DMEM_INIT_FILE("")
     ) dut (
@@ -177,6 +185,12 @@ module tb_external_program;
         perf_muls = 0;
         perf_divs = 0;
         perf_load_use_stalls = 0;
+        perf_hazard_id_ex_load_stalls = 0;
+        perf_hazard_ex_mem_load_stalls = 0;
+        perf_hazard_mul_src_stalls = 0;
+        perf_hazard_mul_waw_stalls = 0;
+        perf_hazard_mul_order_stalls = 0;
+        perf_hazard_mul_struct_stalls = 0;
         perf_exec_wait_stalls = 0;
         perf_mem_wait_stalls = 0;
         perf_mul_wait_stalls = 0;
@@ -233,6 +247,25 @@ module tb_external_program;
             if (perf_stats != 0) begin
                 if (dut.u_core.hazard_stall) begin
                     perf_load_use_stalls = perf_load_use_stalls + 1;
+                    if (dut.u_core.u_hazard.id_ex_load_use_stall) begin
+                        perf_hazard_id_ex_load_stalls = perf_hazard_id_ex_load_stalls + 1;
+                    end
+                    if (dut.u_core.u_hazard.if_id_needs_ex_mem_load_stall &&
+                        dut.u_core.u_hazard.ex_mem_load_use) begin
+                        perf_hazard_ex_mem_load_stalls = perf_hazard_ex_mem_load_stalls + 1;
+                    end
+                    if (dut.u_core.u_hazard.if_id_mul_src_dep) begin
+                        perf_hazard_mul_src_stalls = perf_hazard_mul_src_stalls + 1;
+                    end
+                    if (dut.u_core.u_hazard.if_id_mul_waw_dep) begin
+                        perf_hazard_mul_waw_stalls = perf_hazard_mul_waw_stalls + 1;
+                    end
+                    if (dut.u_core.u_hazard.if_id_mul_order_dep) begin
+                        perf_hazard_mul_order_stalls = perf_hazard_mul_order_stalls + 1;
+                    end
+                    if (dut.u_core.u_hazard.if_id_mul_struct_dep) begin
+                        perf_hazard_mul_struct_stalls = perf_hazard_mul_struct_stalls + 1;
+                    end
                     if (dut.u_core.u_hazard.id_ex_load_use) begin
                         load_use_stall_load_pc = dut.u_core.id_ex_pc;
                     end else if (dut.u_core.u_hazard.ex_mem_load_use) begin
@@ -570,6 +603,13 @@ module tb_external_program;
                         perf_taken_branches,
                         perf_not_taken_branches,
                         perf_pred_taken_branches);
+                    $display("HAZARD_STATS id_ex_load=%0d ex_mem_load=%0d mul_src=%0d mul_waw=%0d mul_order=%0d mul_struct=%0d",
+                        perf_hazard_id_ex_load_stalls,
+                        perf_hazard_ex_mem_load_stalls,
+                        perf_hazard_mul_src_stalls,
+                        perf_hazard_mul_waw_stalls,
+                        perf_hazard_mul_order_stalls,
+                        perf_hazard_mul_struct_stalls);
                     $display("JALR_LAST_TARGET hits=%0d misses=%0d", jalr_last_target_hits, jalr_last_target_misses);
                     for (jalr_i = 0; jalr_i < 16; jalr_i = jalr_i + 1) begin
                         if (jalr_count[jalr_i] != 0) begin

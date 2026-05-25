@@ -9,6 +9,8 @@ module multiplier #(
     input wire [XLEN-1:0] a_i,
     input wire [XLEN-1:0] b_i,
     output wire busy_o,
+    output wire early_valid_o,
+    output wire [XLEN-1:0] early_result_o,
     output wire valid_o,
     output wire [XLEN-1:0] result_o
 );
@@ -31,7 +33,9 @@ module multiplier #(
 
     reg [XLEN-1:0] result_next;
 
-    assign busy_o = operand_valid || product_valid || (|valid_pipe);
+    assign busy_o = 1'b0;
+    assign early_valid_o = product_valid;
+    assign early_result_o = result_next;
     assign valid_o = valid_pipe[MUL_STAGES-1];
     assign result_o = result_pipe[MUL_STAGES-1];
 
@@ -61,8 +65,8 @@ module multiplier #(
                 result_pipe[i] <= {XLEN{1'b0}};
             end
         end else begin
-            operand_valid <= start_i && !busy_o;
-            if (start_i && !busy_o) begin
+            operand_valid <= start_i;
+            if (start_i) begin
                 funct3_q <= funct3_i;
                 a_q <= a_i;
                 b_q <= b_i;

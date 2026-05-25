@@ -385,3 +385,40 @@
   - ignore `build/`, `.Xil/`, `work/`, simulator logs/waves, Vivado logs/checkpoints/bitstreams, local toolchains, and transient preview files;
   - keep `coremark` and `riscv-tests` as official upstream submodule references rather than copying their internal Git metadata into this repository.
 - Next step: commit the cleaned initial import, then add a GitHub remote and push after the remote URL is available.
+
+## Phase 45 CoreMark 3.2 Timing/Resource Optimization - In Progress
+- Goal: reach or approach CoreMark 3.2 while keeping the design plausible for Huoyue/Zynq-7020 timing.
+- Completed in this phase:
+  - tested BHR/local-history removal by setting `BP_LOCAL_HISTORY=0`;
+  - added optional `BP_INIT_TAKEN` predictor cold-start generic with default off;
+  - verified default predictor behavior and init-taken behavior with ModelSim unit tests;
+  - measured no-BHR CoreMark and synthesis/resource tradeoffs.
+- Current finding:
+  - no-BHR reduces predictor complexity but does not reach 3.2; best observed no-BHR CoreMark 2 is `630043` cycles;
+  - reasonable no-BHR synth still has WNS `-2.348 ns` and the same DMEM-to-redirect class of worst path;
+  - oversized no-BHR BTB/BHT is not viable.
+- Next preferred step:
+  - stop increasing no-BHR predictor size;
+  - target the remaining load-use/redirect datapath while keeping no-BHR as a fallback/resource configuration.
+
+## Phase 46 CoreMark 3.0 Hard-Target Closure - Complete
+- Goal: meet the revised hard targets at the same time:
+  - CoreMark/MHz >= 3.0 at 100 MHz
+  - Slice LUTs < 9000
+  - Huoyue/Zynq-7020 post-route 100 MHz timing clean
+- Selected implementation configuration:
+  - `FAST_MUL=0`, `MUL_STAGES=1`
+  - `ENABLE_LOAD_RESP_EX_FORWARD=1`
+  - `ENABLE_LOAD_CONTROL_EARLY_REPLAY=0`
+  - `ENABLE_ID_LOAD_EARLY_READ=0`
+  - `BP_LOCAL_HISTORY=1`
+  - `BP_BHT_DEPTH=64`, `BP_BHR_WIDTH=2`, `BP_BTB_DEPTH=64`
+  - `BP_INIT_TAKEN=0`
+- Selected artifact:
+  - `build/vivado_physopt_soc_top_coremark30_lhr64_bhr2_btb64_lctrl0_idread0_adv_skew_pass2/soc_top_physopt.bit`
+- Verification result:
+  - CoreMark 2 cycles: `650534`, about `3.074 CoreMark/MHz`
+  - Vivado post-route physopt timing: WNS `0.000 ns`, TNS `0.000 ns`, failing setup endpoints `0`
+  - Utilization: LUT `6800`, FF `8278`, RAMB36 `24`, DSP `12`, RAMD64E `16`
+- Current status:
+  - The hard targets are met, but timing margin is exactly 0 ps. The next optimization should first increase timing margin before trying to recover more CoreMark performance.

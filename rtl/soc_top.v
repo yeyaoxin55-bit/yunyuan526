@@ -15,6 +15,7 @@ module soc_top #(
     parameter BP_BHR_WIDTH = 2,
     parameter BP_BTB_DEPTH = 32,
     parameter BP_LOCAL_HISTORY = 0,
+    parameter BP_INIT_TAKEN = 0,
     parameter DMEM_INIT_FILE_B0 = "",
     parameter DMEM_INIT_FILE_B1 = "",
     parameter DMEM_INIT_FILE_B2 = "",
@@ -188,7 +189,8 @@ module soc_top #(
         .BP_BHT_DEPTH(BP_BHT_DEPTH),
         .BP_BHR_WIDTH(BP_BHR_WIDTH),
         .BP_BTB_DEPTH(BP_BTB_DEPTH),
-        .BP_LOCAL_HISTORY(BP_LOCAL_HISTORY)
+        .BP_LOCAL_HISTORY(BP_LOCAL_HISTORY),
+        .BP_INIT_TAKEN(BP_INIT_TAKEN)
     ) u_core (
         .clk(clk),
         .rst(cpu_rst),

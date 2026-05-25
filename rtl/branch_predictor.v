@@ -2,7 +2,8 @@ module branch_predictor #(
     parameter BHT_DEPTH = 128,
     parameter BHR_WIDTH = 4,
     parameter BTB_DEPTH = 64,
-    parameter LOCAL_HISTORY = 1
+    parameter LOCAL_HISTORY = 1,
+    parameter INIT_TAKEN = 0
 ) (
     input wire clk,
     input wire rst,
@@ -17,6 +18,7 @@ module branch_predictor #(
 );
     localparam BHT_INDEX_W = $clog2(BHT_DEPTH);
     localparam BTB_INDEX_W = $clog2(BTB_DEPTH);
+    localparam [1:0] INIT_COUNTER = (INIT_TAKEN != 0) ? 2'b10 : 2'b01;
 
     reg [1:0] bht [0:BHT_DEPTH-1];
     reg btb_valid [0:BTB_DEPTH-1];
@@ -46,7 +48,7 @@ module branch_predictor #(
     always @(posedge clk) begin
         if (rst) begin
             for (i = 0; i < BHT_DEPTH; i = i + 1) begin
-                bht[i] <= 2'b01;
+                bht[i] <= INIT_COUNTER;
             end
             for (i = 0; i < BTB_DEPTH; i = i + 1) begin
                 btb_valid[i] <= 1'b0;
@@ -115,7 +117,7 @@ module branch_predictor #(
 
             initial begin
                 for (pht_init_i = 0; pht_init_i < PHT_DEPTH; pht_init_i = pht_init_i + 1) begin
-                    pht[pht_init_i] = 2'b01;
+                    pht[pht_init_i] = INIT_COUNTER;
                 end
             end
 

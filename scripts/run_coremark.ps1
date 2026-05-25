@@ -13,6 +13,7 @@ param(
   [int]$BpBhrWidth = 3,
   [int]$BpBtbDepth = 64,
   [int]$BpLocalHistory = 1,
+  [int]$BpInitTaken = 0,
   [string]$OptLevel = "-O3",
   [string]$ExtraCFlags = "-funroll-loops",
   [switch]$PerfStats
@@ -83,7 +84,8 @@ $simArgs = @(
   "-BpBhtDepth", $BpBhtDepth,
   "-BpBhrWidth", $BpBhrWidth,
   "-BpBtbDepth", $BpBtbDepth,
-  "-BpLocalHistory", $BpLocalHistory
+  "-BpLocalHistory", $BpLocalHistory,
+  "-BpInitTaken", $BpInitTaken
 )
 if ($PerfStats.IsPresent) {
   $simArgs += "-PerfStats"

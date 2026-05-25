@@ -8,6 +8,8 @@ module tb_multiplier;
     reg [31:0] a;
     reg [31:0] b;
     wire busy;
+    wire early_valid;
+    wire [31:0] early_result;
     wire valid;
     wire [31:0] result;
 
@@ -22,6 +24,8 @@ module tb_multiplier;
         .a_i(a),
         .b_i(b),
         .busy_o(busy),
+        .early_valid_o(early_valid),
+        .early_result_o(early_result),
         .valid_o(valid),
         .result_o(result)
     );
