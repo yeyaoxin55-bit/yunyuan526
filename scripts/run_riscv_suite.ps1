@@ -4,6 +4,8 @@ param(
   [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
   [string]$March = "rv32im_zifencei",
   [string]$Mabi = "ilp32",
+  [ValidateSet(32, 64)]
+  [int]$XLEN = 32,
   [int]$MaxCycles = 200000,
   [int]$MulStages = 1,
   [int]$FastMul = 1,
@@ -63,6 +65,7 @@ foreach ($test in $Tests) {
       "-ToolPrefix", $ToolPrefix,
       "-March", $March,
       "-Mabi", $Mabi,
+      "-XLEN", $XLEN,
       "-MaxCycles", $MaxCycles,
       "-MulStages", $MulStages,
       "-FastMul", $FastMul,

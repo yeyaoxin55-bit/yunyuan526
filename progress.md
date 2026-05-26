@@ -869,6 +869,15 @@
 - Added GitHub remote `origin = https://github.com/yeyaoxin55-bit/yunyuan526.git`.
 - Pushed `main` to GitHub. Current remote-tracking state after push: `b4654af (HEAD -> main, origin/main) Initial project import`.
 
+# 2026-05-21 RV64IM parameterization
+
+- Confirmed the original architecture intent for RV32I/RV64I was only partially implemented: `XLEN` existed, but the core pipeline, decoder, DMEM, and test harnesses still contained many fixed 32-bit data-path assumptions.
+- Added a documented RV64IM parameterization design and implementation plan under `docs/superpowers/`.
+- Added directed `XLEN=64` ModelSim tests for RV64I W-class ALU/load-store behavior and RV64M W-class multiply/divide/remainder behavior.
+- Implemented internal `word_op` decode/execute semantics for RV64 W-class instructions while keeping `XLEN` as the external architecture-width parameter.
+- Parameterized the CPU integer data path, CSR/regfile/ALU/multiplier/divider instances, DMEM data width, and top-level DMEM wiring so RV32 remains the default and RV64 can be selected with `XLEN=64`.
+- Verification passed: focused RV32/RV64 smoke tests, full local ModelSim regression including existing RV32IM/SoC tests and new `tb_rv64i_basic`/`tb_rv64m_basic`, and project structure check.
+
 ## CoreMark 3.2 Optimization Restart
 - Restored the tree to the clean `origin/main` RTL after rejecting the temporary dual-load control-replay experiment.
 - Rejection reason: the directed test passed, but CoreMark 2 with `FAST_MUL=1`, `BHT=256`, `BHR=4`, `BTB=128` worsened from the prior `644845` cycles to `645041` cycles while load-use stalls dropped by only 10. The extra control-state logic is therefore not worth keeping, especially with timing still a constraint.
@@ -1105,3 +1114,29 @@
   - WNS `-0.193 ns`, TNS `-2.977 ns`, WHS `0.024 ns`, 36 setup failing endpoints;
   - rejected because the accepted artifact remains WNS `0.007 ns`.
 - Current accepted board candidate is unchanged: `build/vivado_impl_soc_top_coremark30_mul_early_boundary_adv_skew/soc_top_physopt.bit`.
+## 2026-05-22 RV64 default CoreMark smoke
+
+- Switched the engineering default XLEN to 64 in `cpu_top`, `soc_top`, and `fpga_coremark_top`; legacy RV32 UART/SOC tests now explicitly override `XLEN=32`.
+- Parameterized external program simulation with `-XLEN` and fixed pass/fail/result polling so the harness reads 32-bit result words correctly from both 32-bit and 64-bit DMEM arrays.
+- Added an RV64 linker script and reserved the top of DMEM away from the stack so CoreMark result words at `0x00017ff0`/`0x00017ff4`/`0x00017ff8` no longer collide with RV64 saved registers.
+- Fixed `crt0.S` GP initialization with `.option norelax`; without this, RV64 linker relaxation folded `la gp, __global_pointer$` into `mv gp,gp` and broke gp-relative data/jump-table access.
+- Parameterized CoreMark build and ELF-to-hex conversion for RV32/RV64, with RV64 defaulting to `rv64im`/`lp64` and 8-byte DMEM hex words.
+- RV64 CoreMark smoke passed in ModelSim: `TOTAL_DATA_SIZE=1200`, `ITERATIONS=1`, `COREMARK_SIM_CYCLE=172327`, `COREMARK_RESULT_CYCLES=159633`.
+- Remaining FPGA phase: UART loader/download must be made RV64-DMEM-aware because the board protocol still transfers 32-bit words while the default DMEM word is now 64-bit.
+
+## 2026-05-25 RV64 UART CoreMark loader
+
+- Implemented scheme C for RV64 FPGA/CoreMark download: the UART packet protocol remains 32-bit-word based, while `scripts/send_uart_image.ps1` now treats default DMEM images as 8-byte rows and sends each RV64 row as low-32 then high-32 chunks.
+- Fixed the FPGA DMEM loader path so 32-bit UART loader writes merge into the addressed half of an `XLEN=64` DMEM word instead of zero-extending and overwriting the whole 64-bit word.
+- Added `tb_dmem_loader_rv64` to cover the RV64 BRAM-friendly DMEM loader merge case: writes at `DMEM_BASE+0` and `DMEM_BASE+4` read back as `64'h1122334455667788`.
+- Updated FPGA bring-up docs to use `send_uart_image.ps1 -DMemWordBytes 8` for RV64 images and `-DMemWordBytes 4` for legacy RV32 DMEM images.
+- Verification passed:
+  - `scripts/check_project.ps1`
+  - full `scripts/run_modelsim.ps1`, including `tb_dmem_loader_rv64`, UART loader, SoC UART tests, and RV64I/RV64M directed tests
+  - `scripts/prepare_coremark_fpga.ps1 -XLEN 64 -CpuHz 100000000 -SmokeIterations 1 -TenMsIterations 1 -TenSecIterations 1`, producing RV64 `rv64im/lp64` images with `DMEM_WORD_BYTES=8`
+
+## 2026-05-26 Vivado GUI IMEM init warning fix
+
+- Root cause: manual Vivado GUI projects import `rtl/imem.v` under the Vivado project directory, so `soc_top`'s old default `IMEM_INIT_FILE="sw/uart_hello/uart_hello.hex"` was resolved relative to the Vivado project instead of the repository root. The file exists in the repository, but Vivado could not find it from that working directory.
+- Changed `soc_top` default `IMEM_INIT_FILE` to an empty string. Manual `soc_top` bitstreams now synthesize without depending on a repository-relative hello-program hex file, which matches the RV64 CoreMark UART download flow.
+- The `tb_soc_uart_hello` regression still explicitly passes `sw/uart_hello/uart_hello.hex`, so the old hello-program path remains tested for repository-root simulations.
