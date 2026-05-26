@@ -1,5 +1,5 @@
 module cpu_top #(
-    parameter XLEN = 64,
+    parameter XLEN = 32,
     parameter IMEM_DEPTH = 16384,
     parameter DMEM_DEPTH = 8192,
     parameter DMEM_BASE = 32'h00000000,
@@ -39,10 +39,10 @@ module cpu_top #(
     wire dmem_read;
     wire dmem_read_early;
     wire dmem_write;
-    wire [(XLEN/8)-1:0] dmem_byte_en;
+    wire [3:0] dmem_byte_en;
     wire [31:0] dmem_addr;
-    wire [XLEN-1:0] dmem_wdata;
-    wire [XLEN-1:0] dmem_rdata;
+    wire [31:0] dmem_wdata;
+    wire [31:0] dmem_rdata;
 
     imem #(
         .IMEM_DEPTH(IMEM_DEPTH),
@@ -57,7 +57,6 @@ module cpu_top #(
     );
 
     dmem #(
-        .XLEN(XLEN),
         .DMEM_DEPTH(DMEM_DEPTH),
         .DMEM_BASE(DMEM_BASE),
         .DMEM_INIT_FILE(DMEM_INIT_FILE),

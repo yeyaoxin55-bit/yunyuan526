@@ -1,11 +1,6 @@
 param(
-  [string]$ToolPrefix = "riscv64-unknown-elf-",
+  [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
   [string]$OutDir = "build/coremark",
-  [ValidateSet(32, 64)]
-  [int]$XLEN = 64,
-  [string]$March = "",
-  [string]$Mabi = "",
-  [string]$Linker = "",
   [int]$Iterations = 1,
   [int]$TotalDataSize = 2000,
   [uint32]$CpuHz = 100000000,
@@ -16,56 +11,22 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+$gccPath = if ([System.IO.Path]::IsPathRooted($ToolPrefix)) { $ToolPrefix + "gcc.exe" } else { Join-Path $repoRoot ($ToolPrefix + "gcc.exe") }
+$objcopyPath = if ([System.IO.Path]::IsPathRooted($ToolPrefix)) { $ToolPrefix + "objcopy.exe" } else { Join-Path $repoRoot ($ToolPrefix + "objcopy.exe") }
 
-function Resolve-ToolPath {
-  param(
-    [string]$Prefix,
-    [string]$Name
-  )
-
-  $exeName = "$Name.exe"
-  $cmdName = "$Prefix$Name"
-  if ([System.IO.Path]::IsPathRooted($Prefix)) {
-    $candidate = "$Prefix$exeName"
-    if (Test-Path -LiteralPath $candidate) {
-      return (Resolve-Path -LiteralPath $candidate).Path
-    }
-  } else {
-    $repoCandidate = Join-Path $repoRoot ("$Prefix$exeName")
-    if (Test-Path -LiteralPath $repoCandidate) {
-      return (Resolve-Path -LiteralPath $repoCandidate).Path
-    }
-  }
-
-  $cmd = Get-Command $cmdName -ErrorAction SilentlyContinue
-  if ($cmd) {
-    return $cmd.Source
-  }
-
-  throw "$Name not found. Pass -ToolPrefix <path-prefix> or put $cmdName in PATH."
+if (-not (Test-Path -LiteralPath $gccPath)) {
+  throw "gcc not found: $gccPath"
 }
-
-$gccPath = Resolve-ToolPath -Prefix $ToolPrefix -Name "gcc"
-$objcopyPath = Resolve-ToolPath -Prefix $ToolPrefix -Name "objcopy"
+if (-not (Test-Path -LiteralPath $objcopyPath)) {
+  throw "objcopy not found: $objcopyPath"
+}
 
 $resolvedOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $repoRoot $OutDir }
 New-Item -ItemType Directory -Force -Path $resolvedOutDir | Out-Null
 
 $elf = Join-Path $resolvedOutDir "coremark.elf"
 $map = Join-Path $resolvedOutDir "coremark.map"
-if ($March -eq "") {
-  $March = if ($XLEN -eq 64) { "rv64im" } else { "rv32im" }
-}
-if ($Mabi -eq "") {
-  $Mabi = if ($XLEN -eq 64) { "lp64" } else { "ilp32" }
-}
-if ($Linker -eq "") {
-  $Linker = if ($XLEN -eq 64) { "sw\linker\yl3_rv64im.ld" } else { "sw\linker\yl3_rv32im.ld" }
-}
-$linkerPath = if ([System.IO.Path]::IsPathRooted($Linker)) { $Linker } else { Join-Path $repoRoot $Linker }
-if (-not (Test-Path -LiteralPath $linkerPath)) {
-  throw "Linker script not found: $linkerPath"
-}
+$linker = Join-Path $repoRoot "sw\linker\yl3_rv32im.ld"
 
 $sources = @(
   "sw\runtime\crt0.S",
@@ -78,8 +39,8 @@ $sources = @(
 ) | ForEach-Object { Join-Path $repoRoot $_ }
 
 $flags = @(
-  "-march=$March",
-  "-mabi=$Mabi",
+  "-march=rv32im_zicsr_zifencei",
+  "-mabi=ilp32",
   "-ffreestanding",
   "-fno-builtin",
   "-nostdlib",
@@ -93,7 +54,7 @@ $flags = @(
   "-DPERFORMANCE_RUN=0",
   "-DVALIDATION_RUN=1",
   "-DPROFILE_RUN=0",
-  "-T", $linkerPath,
+  "-T", $linker,
   "-Wl,-Map,$map",
   "-Wl,--print-memory-usage",
   "-o", $elf
@@ -114,7 +75,3 @@ Write-Host "MAP=$map"
 Write-Host "OBJCOPY=$objcopyPath"
 Write-Host "COREMARK_OPT_LEVEL=$OptLevel"
 Write-Host "COREMARK_EXTRA_CFLAGS=$ExtraCFlags"
-Write-Host "COREMARK_XLEN=$XLEN"
-Write-Host "COREMARK_MARCH=$March"
-Write-Host "COREMARK_MABI=$Mabi"
-Write-Host "COREMARK_LINKER=$linkerPath"

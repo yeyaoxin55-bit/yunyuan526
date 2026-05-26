@@ -1,5 +1,4 @@
 module fpga_coremark_top #(
-    parameter XLEN = 64,
     parameter IMEM_INIT_FILE = "build/coremark/fpga/coremark.imem.hex",
     parameter DMEM_INIT_FILE = "build/coremark/fpga/coremark.dmem.hex",
     parameter MUL_STAGES = 1,
@@ -33,7 +32,7 @@ module fpga_coremark_top #(
     wire [31:0] debug_cycle_word;
 
     cpu_top #(
-        .XLEN(XLEN),
+        .XLEN(32),
         .IMEM_DEPTH(16384),
         .DMEM_DEPTH(8192),
         .DMEM_BASE(32'h00010000),

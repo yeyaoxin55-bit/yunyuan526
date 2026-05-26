@@ -1,13 +1,12 @@
 # YunyuanLegend 3.0 RISC-V CPU
 
-This repository contains a compact RV32IM/RV64IM-parameterized five-stage pipelined CPU project targeting simulation, CoreMark performance testing, and Xilinx Zynq-7020 FPGA bring-up.
+This repository contains a compact RV32IM five-stage pipelined CPU project targeting simulation, CoreMark performance testing, and Xilinx Zynq-7020 FPGA bring-up.
 
 The current working direction prioritizes performance first. Area is still tracked, but FPGA resource usage is treated as a secondary constraint when it conflicts with CoreMark throughput or timing closure.
 
 ## Project Status
 
-- ISA target: RV64IM by default, with RV32IM still available through explicit `XLEN=32` overrides in legacy tests and scripts
-- Address map: current SoC/loader/MMIO integration keeps 32-bit addresses while CPU integer registers, ALU, CSR counters, DMEM data, and M-extension operands/results scale with `XLEN`
+- ISA target: RV32IM, bare-metal execution
 - Main FPGA target: Xilinx Zynq-7020, Huoyue board constraints included
 - Main board top: `rtl/soc_top.v`
 - Performance top: `rtl/fpga_coremark_top.v`
@@ -54,7 +53,11 @@ Recommended local tools:
 
 - ModelSim with `vlib`, `vlog`, and `vsim` in `PATH`
 - Xilinx Vivado for synthesis/implementation
-- RISC-V GCC. CoreMark scripts default to `riscv64-unknown-elf-` in `PATH`; pass `-ToolPrefix` for a local xPack or other bare-metal toolchain.
+- xPack RISC-V GCC, expected by default at:
+
+```text
+xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
+```
 
 The toolchain directory is not tracked in Git. Install it locally or pass a different `-ToolPrefix` to the build scripts.
 
@@ -72,8 +75,6 @@ Run the full local ModelSim regression:
 powershell -ExecutionPolicy Bypass -File scripts\run_modelsim.ps1
 ```
 
-The ModelSim regression includes directed RV64I/RV64M tests (`tb_rv64i_basic` and `tb_rv64m_basic`) plus explicit `XLEN=32` legacy RV32IM tests.
-
 Run the official RISC-V test flow through the provided script:
 
 ```powershell
@@ -86,7 +87,6 @@ Short CoreMark simulation example:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_coremark.ps1 `
-  -XLEN 64 `
   -Iterations 2 `
   -TotalDataSize 2000 `
   -MaxCycles 5000000 `
@@ -98,11 +98,10 @@ powershell -ExecutionPolicy Bypass -File scripts\run_coremark.ps1 `
 Prepare FPGA CoreMark images:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\prepare_coremark_fpga.ps1 -XLEN 64 -CpuHz 100000000
+powershell -ExecutionPolicy Bypass -File scripts\prepare_coremark_fpga.ps1 -CpuHz 100000000
 ```
 
 Generated IMEM/DMEM images are written under `build/coremark/`, which is ignored by Git.
-The UART download protocol still transfers 32-bit payload words. For default RV64 images, `scripts/send_uart_image.ps1` reads 64-bit DMEM hex rows and sends each row as low-32 then high-32 chunks, while the FPGA DMEM loader merges those chunks into the addressed 64-bit word. Pass `-DMemWordBytes 4` only when sending RV32-format DMEM images.
 
 ## Vivado
 

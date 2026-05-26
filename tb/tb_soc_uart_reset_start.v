@@ -17,7 +17,6 @@ module tb_soc_uart_reset_start;
     integer wait_count;
 
     soc_top #(
-        .XLEN(32),
         .IMEM_DEPTH(256),
         .DMEM_DEPTH(256),
         .IMEM_INIT_FILE("tb/programs/soc_fail.hex"),

@@ -46,12 +46,10 @@ For Zynq bring-up, connect these outputs to LEDs, ILA, or a small AXI-readable r
 
 `rtl/soc_top.v` now uses the Huoyue 50 MHz PL clock to generate a real 100 MHz CPU clock with an MMCM. For UART download, hold `uart_debug_key_n` low so the CPU stays in reset while IMEM/DMEM are written.
 
-The `soc_top` default IMEM image is intentionally empty for manual Vivado projects. This avoids GUI synthesis warnings from repository-relative `$readmemh` paths and matches the UART download flow, where IMEM and DMEM are loaded after bitstream configuration.
-
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\prepare_coremark_fpga.ps1 -CpuHz 100000000
 powershell -ExecutionPolicy Bypass -File scripts\run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build/vivado_impl_soc_top_huoyue_100m_mmcm_reset_start -PlaceDirective AltSpreadLogic_high -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore
-powershell -ExecutionPolicy Bypass -File scripts\send_uart_image.ps1 -PortName COMx -BaudRate 115200 -DMemWordBytes 8
+powershell -ExecutionPolicy Bypass -File scripts\send_uart_image.ps1 -PortName COMx -BaudRate 115200
 ```
 
 The default send script writes IMEM and DMEM but does not send START. This prevents CoreMark from finishing before the terminal is open. After the image is sent:
@@ -74,8 +72,6 @@ RESULT=PASS
 ```
 
 For the old immediate-run behavior, pass `-StartAfterDownload` to `scripts/send_uart_image.ps1` and do not hold the UART download key low.
-
-The UART packet protocol remains 32-bit-word based for compatibility with the existing loader. With RV64 images, `coremark.dmem.hex` contains 64-bit little-endian DMEM rows; `scripts/send_uart_image.ps1 -DMemWordBytes 8` splits each row into low-32 then high-32 UART chunks. The FPGA-side DMEM loader merges those chunks by byte address into the selected 64-bit memory word. Use `-DMemWordBytes 4` only for legacy RV32 DMEM hex files.
 
 ## Clock frequency
 

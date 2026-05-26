@@ -1,7 +1,5 @@
 param(
-  [string]$ToolPrefix = "riscv64-unknown-elf-",
-  [ValidateSet(32, 64)]
-  [int]$XLEN = 64,
+  [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
   [int]$TotalDataSize = 2000,
   [uint32]$CpuHz = 100000000,
   [int]$SmokeIterations = 2,
@@ -17,6 +15,12 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $resolvedOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $repoRoot $OutDir }
 New-Item -ItemType Directory -Force -Path $resolvedOutDir | Out-Null
+
+$objcopy = if ([System.IO.Path]::IsPathRooted($ToolPrefix)) {
+  $ToolPrefix + "objcopy.exe"
+} else {
+  Join-Path $repoRoot ($ToolPrefix + "objcopy.exe")
+}
 
 function Build-CoreMarkImage {
   param(
@@ -34,7 +38,6 @@ function Build-CoreMarkImage {
   $buildOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\build_coremark.ps1") `
     -ToolPrefix $ToolPrefix `
     -OutDir $imageDir `
-    -XLEN $XLEN `
     -Iterations $Iterations `
     -TotalDataSize $TotalDataSize `
     -CpuHz $CpuHz `
@@ -45,18 +48,11 @@ function Build-CoreMarkImage {
     throw "CoreMark build failed for $Name"
   }
 
-  $objcopyLine = $buildOutput | Where-Object { $_ -match "^OBJCOPY=" } | Select-Object -Last 1
-  if (-not $objcopyLine) {
-    throw "Failed to parse objcopy path for $Name"
-  }
-  $objcopy = ($objcopyLine -replace "^OBJCOPY=", "").Trim()
-
   $elf = Join-Path $imageDir "coremark.elf"
   $hexOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\convert_elf_to_hex.ps1") `
     -Elf $elf `
     -Objcopy $objcopy `
-    -OutDir $imageDir `
-    -DMemWordBytes ($XLEN / 8) 2>&1
+    -OutDir $imageDir 2>&1
   $hexOutput | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) {
     throw "CoreMark hex conversion failed for $Name"
@@ -68,14 +64,14 @@ function Build-CoreMarkImage {
   $dstDmem = Join-Path $resolvedOutDir "$Name.dmem.hex"
   Copy-Item -LiteralPath $srcImem -Destination $dstImem -Force
   Copy-Item -LiteralPath $srcDmem -Destination $dstDmem -Force
-  for ($lane = 0; $lane -lt ($XLEN / 8); $lane++) {
-    Copy-Item -LiteralPath "$srcDmem.b$lane" -Destination "$dstDmem.b$lane" -Force
-  }
+  Copy-Item -LiteralPath "$srcDmem.b0" -Destination "$dstDmem.b0" -Force
+  Copy-Item -LiteralPath "$srcDmem.b1" -Destination "$dstDmem.b1" -Force
+  Copy-Item -LiteralPath "$srcDmem.b2" -Destination "$dstDmem.b2" -Force
+  Copy-Item -LiteralPath "$srcDmem.b3" -Destination "$dstDmem.b3" -Force
 
   return [pscustomobject]@{
     name = $Name
     iterations = $Iterations
-    xlen = $XLEN
     opt_level = $OptLevel
     extra_cflags = $ExtraCFlags
     imem_hex = $dstImem
@@ -96,9 +92,10 @@ $defaultImem = Join-Path $resolvedOutDir "coremark.imem.hex"
 $defaultDmem = Join-Path $resolvedOutDir "coremark.dmem.hex"
 Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.imem.hex") -Destination $defaultImem -Force
 Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex") -Destination $defaultDmem -Force
-for ($lane = 0; $lane -lt ($XLEN / 8); $lane++) {
-  Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex.b$lane") -Destination "$defaultDmem.b$lane" -Force
-}
+Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex.b0") -Destination "$defaultDmem.b0" -Force
+Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex.b1") -Destination "$defaultDmem.b1" -Force
+Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex.b2") -Destination "$defaultDmem.b2" -Force
+Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex.b3") -Destination "$defaultDmem.b3" -Force
 
 Write-Host "COREMARK_FPGA_OUT=$resolvedOutDir"
 Write-Host "COREMARK_FPGA_MANIFEST=$manifest"
