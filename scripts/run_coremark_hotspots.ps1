@@ -13,6 +13,7 @@ param(
   [int]$BpBhrWidth = 2,
   [int]$BpBtbDepth = 64,
   [int]$BpLocalHistory = 1,
+  [int]$BpBtbIndexHash = 0,
   [string]$OptLevel = "-O3",
   [string]$ExtraCFlags = "-funroll-loops",
   [string]$OutDir = "build/coremark/hotspots"
@@ -113,6 +114,7 @@ $runArgs = @(
   "-BpBhrWidth", $BpBhrWidth,
   "-BpBtbDepth", $BpBtbDepth,
   "-BpLocalHistory", $BpLocalHistory,
+  "-BpBtbIndexHash", $BpBtbIndexHash,
   "-OptLevel", $OptLevel,
   "-PerfStats"
 )
@@ -123,7 +125,7 @@ if ($ExtraCFlags -ne "") {
 $raw = & powershell @runArgs 2>&1
 $lines = $raw | ForEach-Object { $_.ToString() }
 
-$tag = "iter${Iterations}_lctrl${LoadControlEarlyReplay}_idload${IdLoadEarlyRead}_bht${BpBhtDepth}_bhr${BpBhrWidth}_btb${BpBtbDepth}"
+$tag = "iter${Iterations}_lctrl${LoadControlEarlyReplay}_idload${IdLoadEarlyRead}_bht${BpBhtDepth}_bhr${BpBhrWidth}_btb${BpBtbDepth}_hash${BpBtbIndexHash}"
 $logPath = Join-Path $resolvedOutDir "$tag.log"
 $lines | Set-Content -LiteralPath $logPath -Encoding ASCII
 

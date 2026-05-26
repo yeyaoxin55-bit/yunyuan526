@@ -422,3 +422,69 @@
   - Utilization: LUT `6800`, FF `8278`, RAMB36 `24`, DSP `12`, RAMD64E `16`
 - Current status:
   - The hard targets are met, but timing margin is exactly 0 ps. The next optimization should first increase timing margin before trying to recover more CoreMark performance.
+
+## Phase 47 BTB Index Hash Trial - Complete
+- Goal: try a low-resource BTB64 conflict-reduction knob without increasing BTB depth.
+- Implemented optional `BTB_INDEX_HASH` / `BP_BTB_INDEX_HASH`, default `0`, so the accepted baseline behavior remains available.
+- Added `tb_branch_predictor_hash.v` to prove two PCs that collide under low-bit BTB indexing can coexist when the hash is enabled.
+- Result: `BP_BTB_INDEX_HASH=8` improves CoreMark simulation, but fails Huoyue 100 MHz post-route timing.
+- Decision: keep the knob for future experiments, but do not replace the Phase 46 board candidate.
+- Next preferred step: target the route-dominated `ex_mem_valid -> redirect_valid` control path if attempting more performance; avoid larger BTB/BHT changes until there is timing margin.
+
+## Phase 48 Redirect/MUL Boundary Timing Closure - Complete
+- Goal: keep the Phase 46 CoreMark 3.0 configuration, but improve the fragile 0 ps timing margin without increasing predictor size or enabling higher-risk load replay features.
+- Rejected experiment:
+  - EX/MEM forwarding write-enable registration passed functional checks but failed implementation at WNS `-0.812 ns`, so it was reverted.
+- Accepted RTL changes:
+  - split jump redirect flushing so only early-redirected JALR target mismatch performs the target comparison;
+  - removed multiplier metadata valid/write-enable bits from the early multiply forwarding mux guard, relying on `mul_early_valid` plus `rd != 0`.
+- Added static checks:
+  - `scripts/check_redirect_jump_mismatch_gate.ps1`
+  - `scripts/check_mul_early_forward_boundary.ps1`
+- Selected implementation configuration remains:
+  - `FAST_MUL=0`, `MUL_STAGES=1`
+  - `ENABLE_LOAD_RESP_EX_FORWARD=1`
+  - `ENABLE_LOAD_CONTROL_EARLY_REPLAY=0`
+  - `ENABLE_ID_LOAD_EARLY_READ=0`
+  - `BP_LOCAL_HISTORY=1`
+  - `BP_BHT_DEPTH=64`, `BP_BHR_WIDTH=2`, `BP_BTB_DEPTH=64`
+  - `BP_INIT_TAKEN=0`, `BP_BTB_INDEX_HASH=0`
+- New selected artifact:
+  - `build/vivado_impl_soc_top_coremark30_mul_early_boundary_adv_skew/soc_top_physopt.bit`
+- Verification result:
+  - full local ModelSim RTL regression passed;
+  - applicable `rv32ui` excluding unsupported `fence_i` passed;
+  - full `rv32um` passed;
+  - CoreMark 50 measured `16263300` cycles, about `3.074 CoreMark/MHz` at 100 MHz.
+- Vivado post-route physopt result:
+  - WNS `0.007 ns`, TNS `0.000 ns`, WHS `0.069 ns`
+  - utilization LUT/FF/BRAM/DSP `6780 / 8280 / 24 / 12`
+- Current next step: the target is met with slightly more margin than Phase 46. The next optimization should be cautious and path-led; the current worst setup path is DMEM BRAM output to `ex_mem_alu_result`, so performance work that restores aggressive load replay is likely to reopen timing risk.
+
+## Phase 49 Load-Control Replay Retest - In Progress
+- Goal: see whether `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1` can raise CoreMark while still meeting the 100 MHz/LUT hard targets.
+- Rejected first experiment: load-response formatter sharing failed post-route timing at WNS `-0.413 ns` and was reverted.
+- Current candidate:
+  - same parameters as Phase 48 except `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1`;
+  - CoreMark 2 cycles improved to `638694`;
+  - synthesis WNS is `-2.264 ns`, LUT `6978`, FF `8388`.
+- Running implementation artifact: `build/vivado_impl_soc_top_coremark30_lctrl1_adv_skew`.
+- Current result:
+  - full implementation failed timing at WNS `-0.401 ns`, LUT `7054`;
+  - backup `ENABLE_LOAD_RESP_EX_FORWARD=0` parameter failed performance at CoreMark 2 `673993` cycles.
+- Route-only status:
+  - `NoTimingRelaxation + AggressiveExplore` improved WNS to `-0.295 ns` but still failed.
+  - `Explore + AggressiveExplore` also failed timing in the later route checks.
+- Rejected additional rescue attempts:
+  - prefetch flush payload-hold: WNS `-0.476 ns`, reverted;
+  - `lctrl=1 + MUL_STAGES=2`: WNS `-0.452 ns`, rejected;
+  - delayed branch predictor branch-update boundary: WNS `-0.402 ns`, reverted.
+- A route-only `Explore + AggressiveExplore` run from the accepted Phase 48 placement also failed at WNS `-0.193 ns`.
+- Next action: keep Phase 48 as the board candidate and move future work to a more direct DMEM/load-response-to-EX-result timing boundary.
+- Acceptance gate:
+  - post-route WNS >= 0 ns at 100 MHz;
+  - LUT < 9000;
+  - full local ModelSim regression;
+  - applicable official `rv32ui` excluding unsupported `fence_i`;
+  - full `rv32um`;
+  - CoreMark 50 confirmation.

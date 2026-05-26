@@ -946,3 +946,162 @@
 - Added `scripts/vivado_physopt_from_route.tcl`.
 - The helper opens an existing routed checkpoint in an output directory, runs another post-route `phys_opt_design`, writes `post_route_physopt.dcp`, emits timing/utilization reports, and writes a physopt bitstream.
 - It was used to turn the best `AdvancedSkewModeling` routed result from WNS `-0.020 ns` into the selected WNS `0.000 ns` artifact.
+
+## Slow-Multiply EX-Result Cut Rejection
+- Hypothesis: with `FAST_MUL=0`, the slow multiplier result should not need to feed `m_result -> ex_result -> ex_mem_alu_result`; cutting that path might remove the current marginal multiplier-to-EX/MEM timing path without changing behavior.
+- A static check first confirmed the old RTL still had `mul_result` feeding `m_result`.
+- The experimental RTL changed the slow-multiply branch of `m_result` to constant zero while keeping `mul_result` on the multiplier completion, FIFO, forwarding, and writeback paths.
+- Verification while active:
+  - static check passed
+  - `scripts/check_project.ps1` passed
+  - targeted ModelSim multiply/load-multiply/divide subset passed
+  - CoreMark 2 stayed exactly `650534` cycles, CPI `1.111788`
+- Synthesis moved the worst path away from direct multiplier result selection and back to DMEM BRAM output into `ex_mem_alu_result`, but the post-route result was worse:
+  - full `ExtraNetDelay_high/AggressiveExplore/Explore/AggressiveExplore`: WNS `-1.050 ns`, LUT `6874`
+  - route-only `NoTimingRelaxation` from the same placement: WNS `-0.632 ns`, LUT `6873`
+- Decision: rejected and reverted. The selected board candidate remains the prior pass2 post-route physopt artifact at WNS `0.000 ns`, LUT `6800`, CoreMark 2 `650534` cycles.
+
+## BTB128 Predictor Parameter Trial Rejection
+- Goal: try pure generic changes to improve CoreMark above the current selected `BHT64/BHR2/BTB64` point without modifying RTL.
+- CoreMark 2 scan with `FAST_MUL=0`, `MUL_STAGES=1`, load-response EX forwarding enabled, load-control early replay disabled, ID early read disabled:
+  - `BHT128/BHR2/BTB64/init0`: `650164` cycles, CPI `1.111365`.
+  - `BHT128/BHR2/BTB128/init0`: `642241` cycles, CPI `1.098872`.
+  - `BHT64/BHR2/BTB64/init1`: `650464` cycles, CPI `1.111690`.
+  - `BHT128/BHR2/BTB256/init0`: `640890` cycles, CPI `1.096684`.
+  - `BHT64/BHR3/BTB128/init0`: `642391` cycles, CPI `1.099051`.
+- Synthesis screens:
+  - `BHT128/BHR2/BTB128`: WNS `-3.062 ns`, LUT `8531`, FF `12570`, RAMD64E `32`.
+  - `BHT128/BHR2/BTB256`: WNS `-2.110 ns`, LUT `11235`, FF `21304`, RAMD64E `32`; rejected immediately because it exceeds the hard `LUT < 9000` target.
+  - `BHT64/BHR2/BTB128`: WNS `-2.049 ns`, LUT `8094`, FF `12309`, RAMD64E `16`; selected for implementation trial.
+- `BHT64/BHR2/BTB128` full implementation with `ExtraNetDelay_high/AggressiveExplore/Explore/AggressiveExplore` failed 100 MHz timing:
+  - artifact: `build/vivado_impl_soc_top_coremark31_lhr64_bhr2_btb128_extra_net_delay/soc_top.bit`
+  - WNS `-0.228 ns`, TNS `-11.955 ns`, 94 setup failing endpoints, WHS `0.037 ns`
+  - resources: LUT `8124`, FF `12550`, RAMB36 `24`, DSP `12`, RAMD64E `16`
+  - worst path: DMEM BRAM output to `u_core/ex_mem_alu_result_reg[9]/D`, data path delay `9.962 ns`, route `62.918%`
+- Route-only rescues from the same placement were worse:
+  - `NoTimingRelaxation + AggressiveExplore`: WNS `-0.680 ns`
+  - `AdvancedSkewModeling + AggressiveExplore`: WNS `-0.700 ns`
+- Decision: reject `BTB128` for the current hard target. It gives about `1.18%` more CoreMark than the selected baseline, but cannot close 100 MHz timing from the tested placement/routes. Keep the selected `BHT64/BHR2/BTB64` bitstream as the board candidate.
+- Tooling note: two initial route-only command attempts failed before Vivado routing because nested PowerShell quoting stripped variables/arguments. The successful command used direct PowerShell execution plus the absolute Vivado path.
+
+## M-Extension Load-Response Forwarding Probe Rejection
+- Hypothesis: the failed `BTB128` timing path passed through logic named under `u_multiplier`, so cutting `load_resp_forward_data` from the M-extension operand path might remove a DMEM-to-EX critical cone while preserving ordinary ALU load-use forwarding.
+- Baseline check before editing:
+  - `tb_load_mul_slow_one_stall`: pass, confirming the current one-stall slow load-to-mul behavior.
+- Temporary RTL experiment:
+  - set `m_ext_load_resp_forward_en = 1'b0`;
+  - first targeted run failed functionally (`word1=00000000`), proving the M-extension path really depends on that forwarding.
+  - added a temporary hazard stall for IF/ID M-extension instructions depending on the current load response.
+  - targeted run still failed functionally because the consumer can already be in ID/EX when the load response arrives; simply stalling IF/ID cannot repair the captured stale operand.
+- Decision: rejected and reverted. A correct version would need a real ID/EX M-extension load-response replay or operand-capture boundary, not a one-line forward disable. That is larger RTL work with likely CoreMark cost, so it is not pursued in this pass.
+- Revert verification:
+  - `tb_load_mul_slow_one_stall`: pass
+  - `git diff -- rtl/cpu_core.v`: empty
+
+## BTB Index Hash Trial
+- Added an optional BTB index hash:
+  - `branch_predictor.BTB_INDEX_HASH`
+  - surfaced as `BP_BTB_INDEX_HASH` through `cpu_core`, `cpu_top`, `soc_top`, `fpga_coremark_top`, `tb_external_program`, `run_external_modelsim.ps1`, `run_coremark.ps1`, `run_coremark_hotspots.ps1`, `run_riscv_test.ps1`, and `run_riscv_suite.ps1`
+  - default remains `0`, preserving the existing low-bit BTB index by default
+- TDD check:
+  - new `tb_branch_predictor_hash.v` first failed at simulation optimization because `BTB_INDEX_HASH` did not exist
+  - after implementation, `tb_branch_predictor`, `tb_branch_predictor_init_taken`, and `tb_branch_predictor_hash` all passed
+- Static/default verification:
+  - `scripts/check_project.ps1`: pass
+  - `scripts/check_bp_resource_profile.ps1`: pass
+  - full `scripts/run_modelsim.ps1`: pass
+  - official `rv32ui` applicable tests excluding unsupported `fence_i`: pass with Phase 46 parameters and hash disabled
+  - official `rv32um` full suite: pass with Phase 46 parameters and hash disabled
+- CoreMark 2 scan with the Phase 46 selected parameters:
+  - hash 0: `650534`
+  - hash 4: `656245`
+  - hash 6: `648816`
+  - hash 8: `646977`
+  - hash 10: `649376`
+  - hash 12: `649086`
+  - hash 14: `650535`
+  - hash 16/18/20/22/24: `650534`
+- CoreMark 50 confirmation:
+  - hash 0: `16263300` cycles, about `3.074 CoreMark/MHz`
+  - hash 8: `16172005` cycles, about `3.092 CoreMark/MHz`
+- Vivado results for hash 8:
+  - synthesis: WNS `-3.007 ns`, LUT `6851`, FF `8015`, RAMB36 `24`, DSP `12`, RAMD64E `16`
+  - full implementation with `ExtraNetDelay_high/AggressiveExplore/AdvancedSkewModeling/AggressiveExplore`: WNS `-0.511 ns`, LUT `6912`, FF `8326`, RAMB36 `24`, DSP `12`, RAMD64E `16`
+  - QoR passed: DMEM/IMEM stay in BRAM and predictor RAMD64E stays `16`
+  - worst setup path is `u_core/ex_mem_valid_reg/C -> u_core/redirect_valid_reg/D`, with data delay `10.585 ns` and route `77.620%`
+- Decision: reject hash 8 as a board replacement despite the stable `0.56%` CoreMark gain. It is a useful optional knob, but the current accepted Phase 46 bitstream remains the timing-clean board candidate.
+
+## Redirect/MUL Boundary Timing Closure
+- First tried registering the EX/MEM forwarding write-enable boundary. It passed static checks, targeted tests, and CoreMark 2 unchanged at `650534` cycles, but full implementation failed timing badly:
+  - artifact: `build/vivado_impl_soc_top_coremark30_exmem_fwd_boundary_adv_skew`
+  - post-route physopt WNS `-0.812 ns`, LUT `6891`
+  - worst path moved to `ex_mem_rd_reg[0] -> redirect_valid_reg/D`
+  - decision: rejected and reverted.
+- Implemented a narrow jump redirect simplification in `rtl/cpu_core.v`:
+  - ordinary JAL/JALR unpredicted flush no longer compares the generic `redirect_target_pc` against `ctrl_pred_target`;
+  - only early-redirected JALR target mismatch compares `jalr_target != ctrl_pred_target`.
+  - added `scripts/check_redirect_jump_mismatch_gate.ps1` and included it in `scripts/check_project.ps1`.
+- The redirect simplification preserved CoreMark 2 at `650534` cycles but did not close timing by itself:
+  - `build/vivado_impl_soc_top_coremark30_redirect_jump_gate_adv_skew`
+  - post-route physopt WNS `-0.113 ns`, LUT `6761`
+  - worst path became multiplier/control into `ex_mem_alu_result`.
+- Implemented the multiply early-forward boundary in `rtl/cpu_core.v`:
+  - `mul_early_forward_valid` now uses the multiplier's aligned `mul_early_valid` plus `rd != 0`, rather than pulling `mul_meta_valid_pipe[1]` and `mul_meta_reg_write_pipe[1]` into the EX forwarding mux.
+  - added `scripts/check_mul_early_forward_boundary.ps1` and included it in `scripts/check_project.ps1`.
+- Verification for the final candidate:
+  - `scripts/check_project.ps1`: pass
+  - full `scripts/run_modelsim.ps1`: pass
+  - applicable `rv32ui` excluding unsupported `fence_i`: pass
+  - full `rv32um`: pass
+  - CoreMark 50: `16263300` measured cycles, CPI `1.139679`, about `3.074 CoreMark/MHz`
+- Vivado result for the final candidate:
+  - artifact: `build/vivado_impl_soc_top_coremark30_mul_early_boundary_adv_skew/soc_top_physopt.bit`
+  - post-route physopt pass2 WNS `0.007 ns`, TNS `0.000 ns`, WHS `0.069 ns`
+  - utilization: LUT `6780`, FF `8280`, RAMB36 `24`, DSP `12`
+  - worst setup path is now DMEM BRAM output to `u_core/ex_mem_alu_result_reg[11]/D`, data delay `10.220 ns`, 11 logic levels.
+- Decision: accept this as the new board candidate. It keeps the same CoreMark performance as Phase 46, slightly reduces LUT, and improves setup margin from `0.000 ns` to `0.007 ns`.
+
+## Phase 49 Load-Control Replay Retest
+- Rejected load-response formatter sharing:
+  - RTL experiment changed `load_resp_forward_data` to reuse `load_resp_data` instead of the duplicated kept formatter.
+  - Static check and CoreMark 2 passed, and synthesis improved to WNS `-1.216 ns`.
+  - Full implementation failed timing: `build/vivado_impl_soc_top_coremark30_loadresp_formatter_shared_adv_skew`, post-route physopt WNS `-0.413 ns`, LUT `6805`, FF `8275`.
+  - Worst path became `u_core/ex_mem_reg_write_reg/C -> u_core/redirect_valid_reg/D`, route dominated at `7.605 ns`.
+  - Decision: rejected and reverted because the accepted Phase 48 artifact remains timing clean at WNS `0.007 ns`.
+- Retested `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1` on the current Phase 48 RTL/parameter point:
+  - CoreMark 2 passed with `638694` measured cycles, CPI `1.120795`.
+  - This improves over the Phase 48 baseline `650534` cycles and reduces load-use stalls from the previous `36757` to `21001`.
+  - Synthesis result: `build/vivado_synth_soc_top_coremark30_lctrl1_current`, WNS `-2.264 ns`, LUT `6978`, FF `8388`, RAMB36 `24`, DSP `12`, RAMD64E `16`.
+  - The synth worst path remains DMEM BRAM output to `ex_mem_alu_result`, so a full implementation trial is justified.
+- Current running implementation:
+  - `build/vivado_impl_soc_top_coremark30_lctrl1_adv_skew`
+  - directives: `ExtraNetDelay_high`, `AggressiveExplore`, `AdvancedSkewModeling`, post-route `AggressiveExplore`
+  - generic set: Phase 48 selected parameters except `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1`.
+- Implementation result:
+  - `build/vivado_impl_soc_top_coremark30_lctrl1_adv_skew` failed timing at post-route WNS `-0.401 ns`, TNS `-94.971 ns`, WHS `0.065 ns`.
+  - Resource remains within target: LUT `7054`, FF `8620`, RAMB36 `24`, DSP `12`, RAMD64E `16`.
+  - Worst setup path is `u_core/id_ex_rs1_reg[0]/C -> u_core/ex_mem_alu_result_reg[0]/D`, data delay `10.492 ns`, route `8.074 ns`.
+  - Decision: do not accept as a board candidate unless a route-only or RTL boundary change closes timing.
+- Backup parameter check:
+  - `ENABLE_LOAD_RESP_EX_FORWARD=0` with `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1` is functionally OK but too slow: CoreMark 2 `673993` cycles, about `2.97 CoreMark/MHz`.
+  - Decision: reject this parameter point despite its likely timing benefit because it violates the hard performance target.
+- Route-only trial from the same `lctrl=1` placement:
+  - `NoTimingRelaxation + AggressiveExplore`: `build/vivado_route_soc_top_coremark30_lctrl1_no_timing_relax`, WNS `-0.295 ns`, TNS `-32.120 ns`, LUT `7067`.
+  - This improves over the first `lctrl=1` route (`-0.401 ns`) but still fails the 100 MHz hard gate.
+  - Running final low-cost route-only trial: `build/vivado_route_soc_top_coremark30_lctrl1_explore`.
+
+## 2026-05-25 Phase 49 continuation
+- Rejected and reverted prefetch flush payload-hold: CoreMark 2 stayed `638694`, but implementation WNS was `-0.476 ns` and route-only `Explore` stayed `-0.421 ns`.
+- Rejected `lctrl=1 + MUL_STAGES=2`: CoreMark 2 `646614`, but implementation WNS `-0.452 ns`, so it did not solve timing.
+- Tested branch predictor branch-update registered boundary:
+  - full ModelSim passed before rejection;
+  - CoreMark 2 `646793`;
+  - synthesis WNS `-2.064 ns`;
+  - full implementation `build/vivado_impl_soc_top_coremark30_bp_update_boundary_lctrl1_explore` failed WNS `-0.402 ns`, TNS `-12.851 ns`, LUT/FF/BRAM/DSP `6965/8659/24/12`;
+  - reverted `rtl/cpu_core.v` changes and removed `scripts/check_bp_branch_update_boundary.ps1`;
+  - `scripts/check_project.ps1` passed after revert.
+- Tested route-only `Explore + AggressiveExplore` from the accepted Phase 48 placement:
+  - artifact `build/vivado_route_soc_top_coremark30_mul_early_boundary_explore_from_place`;
+  - WNS `-0.193 ns`, TNS `-2.977 ns`, WHS `0.024 ns`, 36 setup failing endpoints;
+  - rejected because the accepted artifact remains WNS `0.007 ns`.
+- Current accepted board candidate is unchanged: `build/vivado_impl_soc_top_coremark30_mul_early_boundary_adv_skew/soc_top_physopt.bit`.

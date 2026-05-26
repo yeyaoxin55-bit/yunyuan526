@@ -20,6 +20,7 @@ param(
   [int]$BpBtbDepth = 64,
   [int]$BpLocalHistory = 1,
   [int]$BpInitTaken = 0,
+  [int]$BpBtbIndexHash = 0,
   [switch]$PerfStats,
   [int]$ReplayTrace = 0,
   [int]$ReplayTraceStart = 0,
@@ -148,7 +149,8 @@ $vsimArgs += @(
   "-gBP_BHR_WIDTH=$BpBhrWidth",
   "-gBP_BTB_DEPTH=$BpBtbDepth",
   "-gBP_LOCAL_HISTORY=$BpLocalHistory",
-  "-gBP_INIT_TAKEN=$BpInitTaken"
+  "-gBP_INIT_TAKEN=$BpInitTaken",
+  "-gBP_BTB_INDEX_HASH=$BpBtbIndexHash"
 )
 $vsimArgs += $plusargs
 $doCommand = if ($LogAllSignals.IsPresent -or $resolvedWaveFile -ne "") { "log -r /*; run -all; quit -f" } else { "run -all; quit -f" }

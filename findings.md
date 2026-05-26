@@ -448,3 +448,57 @@
   - post-route physopt WNS `0.000 ns`
 - The high-risk performance features for this hard target are still ID load early read and load-control early replay. They help cycles, but have repeatedly exposed DMEM/redirect timing paths that are too expensive for a clean 100 MHz board candidate.
 - The current selected bitstream meets all revised hard targets, but has no setup slack margin. Treat it as timing-clean but fragile. The next useful optimization should add margin on the current multiplier-to-EX/MEM result path before increasing predictor size or re-enabling aggressive load-use features.
+
+## Slow-Multiply EX-Result Cut Finding
+- Cutting `FAST_MUL=0` slow `mul_result` out of `m_result/ex_result` is functionally safe for the tested paths, but it is not a useful timing optimization for this design point.
+- The path reappears physically through multiplier completion forwarding into a following instruction's EX result, or the implementation falls back to a DMEM-to-EX/MEM path. In both cases post-route timing is worse than the selected baseline.
+- Reject this direction unless the multiplier forwarding protocol is redesigned more deeply. A one-line `m_result` mux cut is not enough to create timing margin.
+
+## BTB128 Parameter Trial Finding
+- The next simple performance knob after the selected `BHT64/BHR2/BTB64` point is BTB capacity. Increasing only BHT to 128 barely helps (`650534 -> 650164` cycles), while increasing BTB to 128 gives a real improvement (`650534 -> 642851` with BHT64, `642241` with BHT128).
+- `BP_INIT_TAKEN=1` is not useful when local history is still enabled in this small predictor point; it slightly worsened the baseline to `650464` cycles.
+- `BHR3` is not worth the added predictor pressure here. `BHT64/BHR3/BTB128` measured `642391` cycles, essentially the same as `BHT128/BHR2/BTB128`, but it does not solve timing.
+- `BTB256` is rejected by resource, not performance. It reached `640890` cycles, but synthesis used `11235` LUT and `21304` FF, exceeding the hard `LUT < 9000` target.
+- The best resource-legal performance candidate, `BHT64/BHR2/BTB128`, still fails post-route timing. It uses `8124` LUT and keeps RAMD64E at `16`, but the best tested route is WNS `-0.228 ns`; route-only `NoTimingRelaxation` and `AdvancedSkewModeling` are worse.
+- Conclusion: larger BTB is a performance win but not timing-clean in the current microarchitecture. Do not increase BTB beyond 64 for the hard 100 MHz target unless a separate RTL timing boundary or placement change first removes the DMEM/load-response to EX result critical path.
+
+## M-Extension Load-Response Forwarding Finding
+- The DMEM/load-response critical path can appear under `u_multiplier` names after Vivado hierarchy rebuild, but disabling M-extension load-response forwarding is not a valid small fix.
+- With `FAST_MUL=0`, load-to-mul correctness depends on forwarding the same-cycle load response into the multiplier operand path. If that path is disabled without a matching ID/EX replay or operand capture, the existing load-mul test computes the wrong result.
+- Stalling only IF/ID is also insufficient because the dependent M-extension instruction may already be held in ID/EX with stale operands when the load response arrives.
+- A correct timing-safe version would need a dedicated ID/EX M-extension replay path or operand update on the wait cycle. That should be treated as a larger architectural experiment, with a new regression for load-to-mul replay and a CoreMark performance screen before Vivado.
+
+## BTB Index Hash Finding
+- A tiny BTB64 XOR hash can recover a measurable amount of CoreMark performance without increasing BTB depth. The best tested shift is `BP_BTB_INDEX_HASH=8`.
+- The improvement is stable but small:
+  - CoreMark 2: `650534 -> 646977`
+  - CoreMark 50: `16263300 -> 16172005`
+  - estimated 100 MHz CoreMark/MHz: about `3.074 -> 3.092`
+- The timing cost is not acceptable at the current fragile point. The hash 8 implementation fails at WNS `-0.511 ns`, even though resources remain below the hard limit at LUT `6912` and RAMD64E `16`.
+- The worst path is not the BTB hash lookup path. It is a route-dominated control path from `ex_mem_valid` into `redirect_valid`, so more predictor capacity or index tweaks are unlikely to be the highest-confidence route to a better board candidate.
+- Keep `BP_BTB_INDEX_HASH` as a default-off experiment switch. Do not use hash 8 for the board bitstream until the redirect/control timing path is improved.
+
+## Redirect/MUL Boundary Finding
+- Registering a broad EX/MEM forwarding write-enable boundary is not a good timing fix here. It moved the worst path into `ex_mem_rd -> redirect_valid` and failed post-route timing at WNS `-0.812 ns`, despite preserving CoreMark cycles.
+- A narrow jump redirect split is safer: keep ordinary unpredicted jump flush detection simple, and only compare targets for early-redirected JALR mismatch. This preserves behavior and reduces LUT slightly, but by itself still failed timing at WNS `-0.113 ns`.
+- The useful margin gain came from the multiply early-forward guard. `mul_early_valid` is already the aligned valid for the slow multiplier's early result, so feeding `mul_meta_valid_pipe[1]` and `mul_meta_reg_write_pipe[1]` into the EX result forwarding mux adds timing pressure without improving correctness for the current M-extension path.
+- The accepted combined result keeps CoreMark unchanged at `16263300` cycles for 50 iterations, while post-route physopt improves from the fragile Phase 46 WNS `0.000 ns` to `0.007 ns` and LUT drops from `6800` to `6780`.
+- The new worst setup path is DMEM BRAM output to `ex_mem_alu_result`. Further performance work should assume load-response/EX-result logic is again the limiting region; re-enabling aggressive load replay or adding predictor capacity should not be attempted without immediate post-route verification.
+
+## Load-Control Replay Retest Finding
+- Sharing the load-response formatter is not a reliable timing optimization. It improved synthesis but failed post-route timing at WNS `-0.413 ns`; the routed worst path moved into `ex_mem_reg_write -> redirect_valid` with very high routing delay. Keep the duplicated kept formatter for the current physical design point.
+- `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1` is the strongest near-term performance knob that still stays within resource limits. Current CoreMark 2 improves `650534 -> 638694` cycles and load-use stalls drop to `21001`.
+- The retested `lctrl=1` synthesis is better than the accepted baseline synthesis (`-2.264 ns` vs `-3.011 ns`) even though it adds control replay logic. This is enough evidence to run a full implementation, but not enough to accept it without post-route closure.
+- Acceptance criteria for `lctrl=1`: post-route WNS must be non-negative at 100 MHz, LUT must stay below 9000, and full ModelSim plus official rv32ui/rv32um plus CoreMark 50 must be rerun before replacing the Phase 48 board candidate.
+- The first full `lctrl=1` implementation failed post-route timing at WNS `-0.401 ns` with LUT `7054`. The worst path changed from direct DMEM output to an ID/EX operand through the ALU into `ex_mem_alu_result`, and route delay was `8.074 ns`. This is still the same load-response/EX-result physical region, not a predictor-capacity issue.
+- Closing `lctrl=1` likely needs either a different route from the existing placement or a targeted RTL boundary on load-response-to-ALU consumers. Disabling all load-response EX forwarding is not acceptable: it dropped CoreMark 2 to `673993` cycles, below the 3.0 CoreMark/MHz target.
+- A route-only `NoTimingRelaxation` pass from the same placement improves `lctrl=1` to WNS `-0.295 ns`, but still fails setup timing and changes the worst path into frontend flush/reset control. That means implementation strategy can recover about 0.1 ns, but not the full 0.4 ns needed.
+
+## Phase 49 Replay/Boundary Rejection Finding
+- `ENABLE_LOAD_CONTROL_EARLY_REPLAY=1` remains a strong performance knob but is not currently timing-clean. The best short simulation point in this pass was CoreMark 2 `638694` cycles, but the first implementation failed at WNS `-0.401 ns`, and the best recorded route-only rescue from that placement was still negative.
+- Prefetch flush payload-hold was rejected and reverted. It preserved CoreMark 2 (`638694` cycles) and static checks, but full implementation worsened to WNS `-0.476 ns`; the route-only `Explore` result remained negative at WNS `-0.421 ns`.
+- `MUL_STAGES=2` with `lctrl=1` was rejected. It still met the 3.0 short performance target at CoreMark 2 `646614` cycles, but synthesis and implementation both worsened, with full implementation WNS `-0.452 ns`, LUT `6924`, FF `8430`.
+- Delaying branch predictor branch-update by one cycle was rejected and reverted. It passed full ModelSim and kept CoreMark 2 at `646793` cycles, and synthesis improved to WNS `-2.064 ns`, but full implementation still failed at WNS `-0.402 ns`, TNS `-12.851 ns`, LUT/FF/BRAM/DSP `6965/8659/24/12`. The worst path moved to `ex_mem_rd_reg[0] -> redirect_valid_reg/D`, so this did not solve the routed redirect/control pressure.
+- Route-only `Explore + AggressiveExplore` from the accepted Phase 48 placement was also not useful. It ended at WNS `-0.193 ns`, TNS `-2.977 ns`, with 36 setup failing endpoints. The accepted `AdvancedSkewModeling` artifact remains better at WNS `0.007 ns`.
+- Current board candidate remains `build/vivado_impl_soc_top_coremark30_mul_early_boundary_adv_skew/soc_top_physopt.bit`: CoreMark 50 `16263300`, about `3.074 CoreMark/MHz`, LUT `6780`, FF `8280`, BRAM36 `24`, DSP `12`, WNS `0.007 ns`.
+- Next promising work should target the DMEM/load-response-to-EX-result cone directly, or add a controlled replay boundary only for a narrower consumer class. Re-enabling broad early replay or increasing predictor pressure should not be retried without a new architectural timing boundary.

@@ -15,6 +15,7 @@ module tb_external_program;
     parameter BP_BTB_DEPTH = 64;
     parameter BP_LOCAL_HISTORY = 1;
     parameter BP_INIT_TAKEN = 0;
+    parameter BP_BTB_INDEX_HASH = 0;
 
     reg clk;
     reg rst;
@@ -129,6 +130,7 @@ module tb_external_program;
         .BP_BTB_DEPTH(BP_BTB_DEPTH),
         .BP_LOCAL_HISTORY(BP_LOCAL_HISTORY),
         .BP_INIT_TAKEN(BP_INIT_TAKEN),
+        .BP_BTB_INDEX_HASH(BP_BTB_INDEX_HASH),
         .IMEM_INIT_FILE(""),
         .DMEM_INIT_FILE("")
     ) dut (

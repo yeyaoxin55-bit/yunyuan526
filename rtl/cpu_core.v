@@ -12,7 +12,8 @@ module cpu_core #(
     parameter BP_BHR_WIDTH = 3,
     parameter BP_BTB_DEPTH = 64,
     parameter BP_LOCAL_HISTORY = 1,
-    parameter BP_INIT_TAKEN = 0
+    parameter BP_INIT_TAKEN = 0,
+    parameter BP_BTB_INDEX_HASH = 0
 ) (
     input wire clk,
     input wire rst,
@@ -492,7 +493,6 @@ module cpu_core #(
                                            !ctrl_load_pending_valid &&
                                            !ctrl_replay_valid &&
                                            !redirect_valid;
-
     hazard_unit #(
         .ENABLE_LOAD_USE_STALL(ENABLE_LOAD_USE_STALL),
         .ENABLE_LOAD_RESP_EX_FORWARD(ENABLE_LOAD_RESP_EX_FORWARD),
@@ -560,8 +560,6 @@ module cpu_core #(
     wire mul_early_forward_valid = (FAST_MUL == 0) &&
                                    (MUL_STAGES == 1) &&
                                    mul_early_valid &&
-                                   mul_meta_valid_pipe[1] &&
-                                   mul_meta_reg_write_pipe[1] &&
                                    (mul_meta_rd_pipe[1] != 5'd0);
     wire [4:0] mul_early_forward_rd = mul_meta_rd_pipe[1];
     wire mul_early_forward_a = mul_early_forward_valid &&
@@ -751,13 +749,13 @@ module cpu_core #(
                                 redirect_taken_q ? redirect_pc_q :
                                 redirect_fallthrough_pc_q;
     wire ctrl_branch_target_mismatch = branch_target != ctrl_pred_target;
-    wire jump_target_mismatch = redirect_target_pc != ctrl_pred_target;
     wire branch_mispredict_raw = ctrl_valid && ctrl_branch &&
                                  (branch_taken ? (!ctrl_pred_taken || ctrl_branch_target_mismatch) :
-                                                 ctrl_pred_taken);
-    wire jump_needs_flush_raw = take_jump &&
-                                (ctrl_jalr ? (!ctrl_jump_early_redirect || jump_target_mismatch) :
-                                             !ctrl_jump_early_redirect);
+                                                  ctrl_pred_taken);
+    wire jump_unpredicted_flush_raw = take_jump && !ctrl_jump_early_redirect;
+    wire jalr_target_mismatch_flush_raw = take_jump && ctrl_jalr && ctrl_jump_early_redirect &&
+                                          (jalr_target != ctrl_pred_target);
+    wire jump_needs_flush_raw = jump_unpredicted_flush_raw || jalr_target_mismatch_flush_raw;
     wire branch_mispredict_detect = !redirect_valid && !pipe_wait && branch_mispredict_raw;
     wire jump_needs_flush_detect = !redirect_valid && !pipe_wait && jump_needs_flush_raw;
     wire redirect_detect = branch_mispredict_detect || jump_needs_flush_detect;
@@ -856,7 +854,8 @@ module cpu_core #(
         .BHR_WIDTH(BP_BHR_WIDTH),
         .BTB_DEPTH(BP_BTB_DEPTH),
         .LOCAL_HISTORY(BP_LOCAL_HISTORY),
-        .INIT_TAKEN(BP_INIT_TAKEN)
+        .INIT_TAKEN(BP_INIT_TAKEN),
+        .BTB_INDEX_HASH(BP_BTB_INDEX_HASH)
     ) u_branch_predictor (
         .clk(clk),
         .rst(rst),

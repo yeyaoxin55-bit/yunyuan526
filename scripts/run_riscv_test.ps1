@@ -14,6 +14,7 @@ param(
   [int]$BpBhrWidth = 3,
   [int]$BpBtbDepth = 64,
   [int]$BpLocalHistory = 1,
+  [int]$BpBtbIndexHash = 0,
   [string]$WaveFile = "",
   [string]$TranscriptFile = "",
   [switch]$LogAllSignals
@@ -74,7 +75,8 @@ $simArgs = @(
   "-BpBhtDepth", $BpBhtDepth,
   "-BpBhrWidth", $BpBhrWidth,
   "-BpBtbDepth", $BpBtbDepth,
-  "-BpLocalHistory", $BpLocalHistory
+  "-BpLocalHistory", $BpLocalHistory,
+  "-BpBtbIndexHash", $BpBtbIndexHash
 )
 if ($WaveFile -ne "") {
   $simArgs += @("-WaveFile", $WaveFile)

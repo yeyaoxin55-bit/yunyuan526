@@ -3,7 +3,8 @@ module branch_predictor #(
     parameter BHR_WIDTH = 4,
     parameter BTB_DEPTH = 64,
     parameter LOCAL_HISTORY = 1,
-    parameter INIT_TAKEN = 0
+    parameter INIT_TAKEN = 0,
+    parameter BTB_INDEX_HASH = 0
 ) (
     input wire clk,
     input wire rst,
@@ -34,10 +35,25 @@ module branch_predictor #(
     reg [31:0] update_target_q;
     integer i;
 
+    function [BTB_INDEX_W-1:0] btb_index_for_pc;
+        input [31:0] pc_value;
+        integer bit_i;
+        begin
+            btb_index_for_pc = pc_value[BTB_INDEX_W+1:2];
+            if (BTB_INDEX_HASH != 0) begin
+                for (bit_i = 0; bit_i < BTB_INDEX_W; bit_i = bit_i + 1) begin
+                    if ((BTB_INDEX_HASH + bit_i) < 32) begin
+                        btb_index_for_pc[bit_i] = btb_index_for_pc[bit_i] ^ pc_value[BTB_INDEX_HASH + bit_i];
+                    end
+                end
+            end
+        end
+    endfunction
+
     wire [BHT_INDEX_W-1:0] bht_index = pc_i[BHT_INDEX_W+1:2];
-    wire [BTB_INDEX_W-1:0] btb_index = pc_i[BTB_INDEX_W+1:2];
+    wire [BTB_INDEX_W-1:0] btb_index = btb_index_for_pc(pc_i);
     wire [BHT_INDEX_W-1:0] update_bht_index = update_pc_i[BHT_INDEX_W+1:2];
-    wire [BTB_INDEX_W-1:0] update_btb_index = update_pc_i[BTB_INDEX_W+1:2];
+    wire [BTB_INDEX_W-1:0] update_btb_index = btb_index_for_pc(update_pc_i);
     wire btb_hit = btb_valid[btb_index] && (btb_tag[btb_index] == pc_i);
     wire bht_predict_taken = bht[bht_index][1];
     wire direction_predict_taken;

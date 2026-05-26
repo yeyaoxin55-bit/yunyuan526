@@ -14,6 +14,7 @@ param(
   [int]$BpBhrWidth = 3,
   [int]$BpBtbDepth = 64,
   [int]$BpLocalHistory = 1,
+  [int]$BpBtbIndexHash = 0,
   [string]$ArtifactDir = "",
   [switch]$Wave,
   [switch]$LogAllSignals
@@ -71,7 +72,8 @@ foreach ($test in $Tests) {
       "-BpBhtDepth", $BpBhtDepth,
       "-BpBhrWidth", $BpBhrWidth,
       "-BpBtbDepth", $BpBtbDepth,
-      "-BpLocalHistory", $BpLocalHistory
+      "-BpLocalHistory", $BpLocalHistory,
+      "-BpBtbIndexHash", $BpBtbIndexHash
     )
     if ($resolvedArtifactDir -ne "") {
       $safeSuite = $Suite -replace "[^A-Za-z0-9_.-]", "_"

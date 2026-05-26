@@ -10,7 +10,8 @@ module fpga_coremark_top #(
     parameter BP_BHR_WIDTH = 2,
     parameter BP_BTB_DEPTH = 32,
     parameter BP_LOCAL_HISTORY = 0,
-    parameter BP_INIT_TAKEN = 0
+    parameter BP_INIT_TAKEN = 0,
+    parameter BP_BTB_INDEX_HASH = 0
 ) (
     input wire clk,
     input wire rst_n,
@@ -46,6 +47,7 @@ module fpga_coremark_top #(
         .BP_BTB_DEPTH(BP_BTB_DEPTH),
         .BP_LOCAL_HISTORY(BP_LOCAL_HISTORY),
         .BP_INIT_TAKEN(BP_INIT_TAKEN),
+        .BP_BTB_INDEX_HASH(BP_BTB_INDEX_HASH),
         .IMEM_INIT_FILE(IMEM_INIT_FILE),
         .DMEM_INIT_FILE(DMEM_INIT_FILE),
         .DMEM_INIT_FILE_B0({DMEM_INIT_FILE, ".b0"}),

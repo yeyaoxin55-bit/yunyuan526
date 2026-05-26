@@ -14,6 +14,7 @@ module cpu_top #(
     parameter BP_BTB_DEPTH = 64,
     parameter BP_LOCAL_HISTORY = 1,
     parameter BP_INIT_TAKEN = 0,
+    parameter BP_BTB_INDEX_HASH = 0,
     parameter IMEM_INIT_FILE = "",
     parameter DMEM_INIT_FILE = "",
     parameter DMEM_INIT_FILE_B0 = "",
@@ -97,7 +98,8 @@ module cpu_top #(
         .BP_BHR_WIDTH(BP_BHR_WIDTH),
         .BP_BTB_DEPTH(BP_BTB_DEPTH),
         .BP_LOCAL_HISTORY(BP_LOCAL_HISTORY),
-        .BP_INIT_TAKEN(BP_INIT_TAKEN)
+        .BP_INIT_TAKEN(BP_INIT_TAKEN),
+        .BP_BTB_INDEX_HASH(BP_BTB_INDEX_HASH)
     ) u_core (
         .clk(clk),
         .rst(rst),
