@@ -29,6 +29,7 @@ $required = @(
   "tb/tb_mul_pipeline_back_to_back.v",
   "tb/tb_mul_result_forward_early.v",
   "tb/tb_ras_return.v",
+  "tb/tb_dmem_loader_rv64.v",
   "tb/tb_load_branch_zero_stall.v",
   "tb/tb_load_jalr_zero_stall.v",
   "tb/tb_load_branch_same_rd_replay.v",

@@ -102,7 +102,7 @@ powershell -ExecutionPolicy Bypass -File scripts\prepare_coremark_fpga.ps1 -XLEN
 ```
 
 Generated IMEM/DMEM images are written under `build/coremark/`, which is ignored by Git.
-The RV64 simulation path is validated; UART loading of 64-bit DMEM images is the next FPGA bring-up phase because the UART protocol still transfers 32-bit words.
+The UART download protocol still transfers 32-bit payload words. For default RV64 images, `scripts/send_uart_image.ps1` reads 64-bit DMEM hex rows and sends each row as low-32 then high-32 chunks, while the FPGA DMEM loader merges those chunks into the addressed 64-bit word. Pass `-DMemWordBytes 4` only when sending RV32-format DMEM images.
 
 ## Vivado
 

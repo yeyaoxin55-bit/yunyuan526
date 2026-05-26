@@ -3,7 +3,7 @@ module soc_top #(
     parameter IMEM_DEPTH = 16384,
     parameter DMEM_DEPTH = 8192,
     parameter DMEM_BASE = 32'h00010000,
-    parameter IMEM_INIT_FILE = "sw/uart_hello/uart_hello.hex",
+    parameter IMEM_INIT_FILE = "",
     parameter DMEM_INIT_FILE = "",
     parameter UART_CLKS_PER_BIT = 868,
     parameter MUL_STAGES = 1,

@@ -965,3 +965,20 @@
 - Parameterized CoreMark build and ELF-to-hex conversion for RV32/RV64, with RV64 defaulting to `rv64im`/`lp64` and 8-byte DMEM hex words.
 - RV64 CoreMark smoke passed in ModelSim: `TOTAL_DATA_SIZE=1200`, `ITERATIONS=1`, `COREMARK_SIM_CYCLE=172327`, `COREMARK_RESULT_CYCLES=159633`.
 - Remaining FPGA phase: UART loader/download must be made RV64-DMEM-aware because the board protocol still transfers 32-bit words while the default DMEM word is now 64-bit.
+
+# 2026-05-25 RV64 UART CoreMark loader
+
+- Implemented scheme C for RV64 FPGA/CoreMark download: the UART packet protocol remains 32-bit-word based, while `scripts/send_uart_image.ps1` now treats default DMEM images as 8-byte rows and sends each RV64 row as low-32 then high-32 chunks.
+- Fixed the FPGA DMEM loader path so 32-bit UART loader writes merge into the addressed half of an `XLEN=64` DMEM word instead of zero-extending and overwriting the whole 64-bit word.
+- Added `tb_dmem_loader_rv64` to cover the RV64 BRAM-friendly DMEM loader merge case: writes at `DMEM_BASE+0` and `DMEM_BASE+4` read back as `64'h1122334455667788`.
+- Updated FPGA bring-up docs to use `send_uart_image.ps1 -DMemWordBytes 8` for RV64 images and `-DMemWordBytes 4` for legacy RV32 DMEM images.
+- Verification passed:
+  - `scripts/check_project.ps1`
+  - full `scripts/run_modelsim.ps1`, including `tb_dmem_loader_rv64`, UART loader, SoC UART tests, and RV64I/RV64M directed tests
+  - `scripts/prepare_coremark_fpga.ps1 -XLEN 64 -CpuHz 100000000 -SmokeIterations 1 -TenMsIterations 1 -TenSecIterations 1`, producing RV64 `rv64im/lp64` images with `DMEM_WORD_BYTES=8`
+
+# 2026-05-26 Vivado GUI IMEM init warning fix
+
+- Root cause: manual Vivado GUI projects import `rtl/imem.v` under the Vivado project directory, so `soc_top`'s old default `IMEM_INIT_FILE="sw/uart_hello/uart_hello.hex"` was resolved relative to the Vivado project instead of the repository root. The file exists in the repository, but Vivado could not find it from that working directory.
+- Changed `soc_top` default `IMEM_INIT_FILE` to an empty string. Manual `soc_top` bitstreams now synthesize without depending on a repository-relative hello-program hex file, which matches the RV64 CoreMark UART download flow.
+- The `tb_soc_uart_hello` regression still explicitly passes `sw/uart_hello/uart_hello.hex`, so the old hello-program path remains tested for repository-root simulations.

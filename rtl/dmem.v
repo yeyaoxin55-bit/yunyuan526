@@ -151,12 +151,18 @@ module dmem #(
                     rdata_q <= {XLEN{1'b0}};
                 end
 
-                if (loader_we && (loader_word_index < DMEM_DEPTH)) begin
-                    mem[loader_word_index] <= extend_loader_word(loader_wdata);
-                    update_debug_byte((loader_addr - DMEM_BASE) >> 2, 2'd0, loader_wdata[7:0]);
-                    update_debug_byte((loader_addr - DMEM_BASE) >> 2, 2'd1, loader_wdata[15:8]);
-                    update_debug_byte((loader_addr - DMEM_BASE) >> 2, 2'd2, loader_wdata[23:16]);
-                    update_debug_byte((loader_addr - DMEM_BASE) >> 2, 2'd3, loader_wdata[31:24]);
+                if (loader_we) begin
+                    for (j = 0; j < 4; j = j + 1) begin
+                        write_addr = (loader_addr - DMEM_BASE) + j;
+                        write_index = write_addr >> WORD_SHIFT;
+                        write_offset = write_addr[OFFSET_W-1:0];
+                        write_debug_index = write_addr >> 2;
+                        write_debug_offset = write_addr[1:0];
+                        if (write_index < DMEM_DEPTH) begin
+                            mem[write_index][(8 * write_offset) +: 8] <= loader_wdata[(8 * j) +: 8];
+                            update_debug_byte(write_debug_index, write_debug_offset, loader_wdata[(8 * j) +: 8]);
+                        end
+                    end
                 end else if (mem_write) begin
                     for (j = 0; j < BYTE_COUNT; j = j + 1) begin
                         if (byte_en[j]) begin
@@ -177,10 +183,13 @@ module dmem #(
             (* ram_style = "block" *) reg [XLEN-1:0] mem_bram [0:DMEM_DEPTH-1];
             reg [XLEN-1:0] read_word_q;
             reg [OFFSET_W-1:0] read_offset_q;
+            wire [OFFSET_W-1:0] loader_byte_offset = loader_addr[OFFSET_W-1:0];
             wire bram_write = loader_we || mem_write;
             wire [31:0] bram_write_index = loader_we ? loader_word_index : word_index;
-            wire [(XLEN/8)-1:0] bram_write_be = loader_we ? {{(BYTE_COUNT-4){1'b0}}, 4'b1111} : (byte_en << byte_offset);
-            wire [XLEN-1:0] bram_write_data = loader_we ? extend_loader_word(loader_wdata) : (wdata << (8 * byte_offset));
+            wire [(XLEN/8)-1:0] bram_loader_be = {{(BYTE_COUNT-4){1'b0}}, 4'b1111} << loader_byte_offset;
+            wire [XLEN-1:0] bram_loader_data = extend_loader_word(loader_wdata) << (8 * loader_byte_offset);
+            wire [(XLEN/8)-1:0] bram_write_be = loader_we ? bram_loader_be : (byte_en << byte_offset);
+            wire [XLEN-1:0] bram_write_data = loader_we ? bram_loader_data : (wdata << (8 * byte_offset));
             integer k;
             assign rdata = read_word_q >> (8 * read_offset_q);
 
