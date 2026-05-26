@@ -2,6 +2,8 @@ param(
   [Parameter(Mandatory=$true)][string]$PortName,
   [string]$IMemHex = "build/coremark/fpga/coremark.imem.hex",
   [string]$DMemHex = "build/coremark/fpga/coremark.dmem.hex",
+  [ValidateSet(4, 8)]
+  [int]$DMemWordBytes = 8,
   [int]$BaudRate = 115200,
   [int]$ChunkWords = 64,
   [switch]$StartAfterDownload
@@ -18,14 +20,20 @@ function Resolve-RepoPath {
 }
 
 function Read-HexWords {
-  param([string]$Path)
+  param(
+    [string]$Path,
+    [ValidateSet(4, 8)]
+    [int]$WordBytes = 4
+  )
   $resolved = Resolve-RepoPath $Path
   if (-not (Test-Path -LiteralPath $resolved)) {
     throw "Missing hex image: $resolved"
   }
 
   $words = New-Object System.Collections.Generic.List[UInt32]
+  $lineNumber = 0
   foreach ($line in Get-Content -LiteralPath $resolved) {
+    $lineNumber++
     $clean = ($line -replace "//.*$", "").Trim()
     if ($clean.Length -eq 0) {
       continue
@@ -33,7 +41,19 @@ function Read-HexWords {
     if ($clean.StartsWith("@")) {
       continue
     }
-    [void]$words.Add([Convert]::ToUInt32($clean, 16))
+    if ($WordBytes -eq 4) {
+      if ($clean.Length -gt 8) {
+        throw "Expected 32-bit hex word in $resolved line $lineNumber, got '$clean'"
+      }
+      [void]$words.Add([Convert]::ToUInt32($clean, 16))
+    } else {
+      if ($clean.Length -gt 16) {
+        throw "Expected 64-bit hex word in $resolved line $lineNumber, got '$clean'"
+      }
+      $value = [Convert]::ToUInt64($clean, 16)
+      [void]$words.Add([UInt32]($value -band ([UInt64]0xffffffff)))
+      [void]$words.Add([UInt32](($value -shr 32) -band ([UInt64]0xffffffff)))
+    }
   }
   return ,$words.ToArray()
 }
@@ -96,8 +116,8 @@ function Send-Image {
   }
 }
 
-$imemWords = Read-HexWords $IMemHex
-$dmemWords = Read-HexWords $DMemHex
+$imemWords = Read-HexWords -Path $IMemHex -WordBytes 4
+$dmemWords = Read-HexWords -Path $DMemHex -WordBytes $DMemWordBytes
 
 $serial = [System.IO.Ports.SerialPort]::new($PortName, $BaudRate, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One)
 $serial.WriteTimeout = 5000
@@ -110,9 +130,9 @@ try {
   if ($StartAfterDownload) {
     $startPacket = New-UartPacket -Command 0x03 -Address 0x00000000 -Words @()
     $serial.Write($startPacket, 0, $startPacket.Length)
-    Write-Host "UART image sent and START packet sent: IMEM=$($imemWords.Count) words DMEM=$($dmemWords.Count) words PORT=$PortName BAUD=$BaudRate"
+    Write-Host "UART image sent and START packet sent: IMEM=$($imemWords.Count) words DMEM=$($dmemWords.Count) 32-bit chunks DMEM_WORD_BYTES=$DMemWordBytes PORT=$PortName BAUD=$BaudRate"
   } else {
-    Write-Host "UART image sent without START: IMEM=$($imemWords.Count) words DMEM=$($dmemWords.Count) words PORT=$PortName BAUD=$BaudRate"
+    Write-Host "UART image sent without START: IMEM=$($imemWords.Count) words DMEM=$($dmemWords.Count) 32-bit chunks DMEM_WORD_BYTES=$DMemWordBytes PORT=$PortName BAUD=$BaudRate"
     Write-Host "Open the serial terminal, release uart_debug_key_n, then press sys_rst_n reset to run the loaded image."
   }
 } finally {

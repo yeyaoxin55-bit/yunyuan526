@@ -1,4 +1,5 @@
 module dmem #(
+    parameter XLEN = 32,
     parameter DMEM_DEPTH = 8192,
     parameter DMEM_BASE = 32'h00000000,
     parameter DMEM_INIT_FILE = "",
@@ -11,10 +12,10 @@ module dmem #(
     input wire clk,
     input wire mem_read,
     input wire mem_write,
-    input wire [3:0] byte_en,
+    input wire [(XLEN/8)-1:0] byte_en,
     input wire [31:0] addr,
-    input wire [31:0] wdata,
-    output wire [31:0] rdata,
+    input wire [XLEN-1:0] wdata,
+    output wire [XLEN-1:0] rdata,
     output wire [31:0] debug_word0,
     output wire [31:0] debug_word1,
     output wire [31:0] debug_word2,
@@ -27,20 +28,25 @@ module dmem #(
     input wire [31:0] loader_addr,
     input wire [31:0] loader_wdata
 );
-    reg [31:0] mem [0:DMEM_DEPTH-1];
+    localparam BYTE_COUNT = XLEN / 8;
+    localparam WORD_SHIFT = (XLEN == 64) ? 3 : 2;
+    localparam OFFSET_W = (XLEN == 64) ? 3 : 2;
+
+    reg [XLEN-1:0] mem [0:DMEM_DEPTH-1];
     localparam [31:0] PASS_INDEX = (32'h00017ff0 - DMEM_BASE) >> 2;
     localparam [31:0] FAIL_INDEX = (32'h00017ff4 - DMEM_BASE) >> 2;
     localparam [31:0] CYCLE_INDEX = (32'h00017ff8 - DMEM_BASE) >> 2;
-    wire [31:0] word_index = (addr - DMEM_BASE) >> 2;
-    wire [31:0] loader_word_index = (loader_addr - DMEM_BASE) >> 2;
-    wire [1:0] byte_offset = addr[1:0];
-    wire [3:0] aligned_byte_en = byte_en << byte_offset;
-    wire [31:0] aligned_wdata = wdata << (8 * byte_offset);
+    wire [31:0] word_index = (addr - DMEM_BASE) >> WORD_SHIFT;
+    wire [31:0] loader_word_index = (loader_addr - DMEM_BASE) >> WORD_SHIFT;
+    wire [OFFSET_W-1:0] byte_offset = addr[OFFSET_W-1:0];
+    wire [(2*XLEN)-1:0] zero_read_window = {(2*XLEN){1'b0}};
     integer i;
     integer j;
     reg [31:0] write_addr;
     reg [31:0] write_index;
-    reg [1:0] write_offset;
+    reg [OFFSET_W-1:0] write_offset;
+    reg [31:0] write_debug_index;
+    reg [1:0] write_debug_offset;
     reg [31:0] debug_word0_r;
     reg [31:0] debug_word1_r;
     reg [31:0] debug_word2_r;
@@ -49,6 +55,17 @@ module dmem #(
     reg [31:0] debug_pass_word_r;
     reg [31:0] debug_fail_word_r;
     reg [31:0] debug_cycle_word_r;
+
+    function [XLEN-1:0] extend_loader_word;
+        input [31:0] value;
+        begin
+            if (XLEN == 32) begin
+                extend_loader_word = value;
+            end else begin
+                extend_loader_word = {{(XLEN-32){1'b0}}, value};
+            end
+        end
+    endfunction
 
     task update_debug_byte;
         input [31:0] index;
@@ -104,7 +121,7 @@ module dmem #(
 
     initial begin
         for (i = 0; i < DMEM_DEPTH; i = i + 1) begin
-            mem[i] = 32'h00000000;
+            mem[i] = {XLEN{1'b0}};
         end
         if (DMEM_INIT_FILE != "") begin
             $readmemh(DMEM_INIT_FILE, mem);
@@ -121,60 +138,66 @@ module dmem #(
 
     generate
         if (SUPPORT_MISALIGNED != 0) begin : gen_misaligned
-            wire [63:0] read_window = {((word_index + 1) < DMEM_DEPTH) ? mem[word_index + 1] : 32'h00000000,
-                                       (word_index < DMEM_DEPTH) ? mem[word_index] : 32'h00000000};
-            wire [63:0] shifted_read_window = read_window >> (8 * byte_offset);
-            reg [31:0] rdata_q;
+            wire [(2*XLEN)-1:0] read_window = {((word_index + 1) < DMEM_DEPTH) ? mem[word_index + 1] : {XLEN{1'b0}},
+                                               (word_index < DMEM_DEPTH) ? mem[word_index] : {XLEN{1'b0}}};
+            wire [(2*XLEN)-1:0] shifted_read_window = read_window >> (8 * byte_offset);
+            reg [XLEN-1:0] rdata_q;
             assign rdata = rdata_q;
 
             always @(posedge clk) begin
                 if (mem_read) begin
-                    rdata_q <= shifted_read_window[31:0];
+                    rdata_q <= shifted_read_window[XLEN-1:0];
                 end else begin
-                    rdata_q <= 32'h00000000;
+                    rdata_q <= {XLEN{1'b0}};
                 end
 
-                if (loader_we && (loader_word_index < DMEM_DEPTH)) begin
-                    mem[loader_word_index] <= loader_wdata;
-                    update_debug_byte(loader_word_index, 2'd0, loader_wdata[7:0]);
-                    update_debug_byte(loader_word_index, 2'd1, loader_wdata[15:8]);
-                    update_debug_byte(loader_word_index, 2'd2, loader_wdata[23:16]);
-                    update_debug_byte(loader_word_index, 2'd3, loader_wdata[31:24]);
-                end else if (mem_write) begin
+                if (loader_we) begin
                     for (j = 0; j < 4; j = j + 1) begin
+                        write_addr = (loader_addr - DMEM_BASE) + j;
+                        write_index = write_addr >> WORD_SHIFT;
+                        write_offset = write_addr[OFFSET_W-1:0];
+                        write_debug_index = write_addr >> 2;
+                        write_debug_offset = write_addr[1:0];
+                        if (write_index < DMEM_DEPTH) begin
+                            mem[write_index][(8 * write_offset) +: 8] <= loader_wdata[(8 * j) +: 8];
+                            update_debug_byte(write_debug_index, write_debug_offset, loader_wdata[(8 * j) +: 8]);
+                        end
+                    end
+                end else if (mem_write) begin
+                    for (j = 0; j < BYTE_COUNT; j = j + 1) begin
                         if (byte_en[j]) begin
                             write_addr = (addr - DMEM_BASE) + j;
-                            write_index = write_addr >> 2;
-                            write_offset = write_addr[1:0];
+                            write_index = write_addr >> WORD_SHIFT;
+                            write_offset = write_addr[OFFSET_W-1:0];
+                            write_debug_index = write_addr >> 2;
+                            write_debug_offset = write_addr[1:0];
                             if (write_index < DMEM_DEPTH) begin
-                                case (write_offset)
-                                    2'd0: mem[write_index][7:0]   <= wdata[(8 * j) +: 8];
-                                    2'd1: mem[write_index][15:8]  <= wdata[(8 * j) +: 8];
-                                    2'd2: mem[write_index][23:16] <= wdata[(8 * j) +: 8];
-                                    2'd3: mem[write_index][31:24] <= wdata[(8 * j) +: 8];
-                                endcase
-                                update_debug_byte(write_index, write_offset, wdata[(8 * j) +: 8]);
+                                mem[write_index][(8 * write_offset) +: 8] <= wdata[(8 * j) +: 8];
+                                update_debug_byte(write_debug_index, write_debug_offset, wdata[(8 * j) +: 8]);
                             end
                         end
                     end
                 end
             end
         end else begin : gen_bram_friendly
-            (* ram_style = "block" *) reg [31:0] mem_bram [0:DMEM_DEPTH-1];
-            reg [31:0] read_word_q;
-            reg [1:0] read_offset_q;
+            (* ram_style = "block" *) reg [XLEN-1:0] mem_bram [0:DMEM_DEPTH-1];
+            reg [XLEN-1:0] read_word_q;
+            reg [OFFSET_W-1:0] read_offset_q;
+            wire [OFFSET_W-1:0] loader_byte_offset = loader_addr[OFFSET_W-1:0];
             wire bram_write = loader_we || mem_write;
             wire [31:0] bram_write_index = loader_we ? loader_word_index : word_index;
-            wire [3:0] bram_write_be = loader_we ? 4'b1111 : aligned_byte_en;
-            wire [31:0] bram_write_data = loader_we ? loader_wdata : aligned_wdata;
+            wire [(XLEN/8)-1:0] bram_loader_be = {{(BYTE_COUNT-4){1'b0}}, 4'b1111} << loader_byte_offset;
+            wire [XLEN-1:0] bram_loader_data = extend_loader_word(loader_wdata) << (8 * loader_byte_offset);
+            wire [(XLEN/8)-1:0] bram_write_be = loader_we ? bram_loader_be : (byte_en << byte_offset);
+            wire [XLEN-1:0] bram_write_data = loader_we ? bram_loader_data : (wdata << (8 * byte_offset));
             integer k;
             assign rdata = read_word_q >> (8 * read_offset_q);
 
             initial begin
-                read_word_q = 32'h00000000;
-                read_offset_q = 2'd0;
+                read_word_q = {XLEN{1'b0}};
+                read_offset_q = {OFFSET_W{1'b0}};
                 for (k = 0; k < DMEM_DEPTH; k = k + 1) begin
-                    mem_bram[k] = 32'h00000000;
+                    mem_bram[k] = {XLEN{1'b0}};
                 end
                 if (DMEM_INIT_FILE != "") begin
                     $readmemh(DMEM_INIT_FILE, mem_bram);
@@ -188,14 +211,14 @@ module dmem #(
                 end
 
                 if (bram_write && (bram_write_index < DMEM_DEPTH)) begin
-                    if (bram_write_be[0]) mem_bram[bram_write_index][7:0] <= bram_write_data[7:0];
-                    if (bram_write_be[1]) mem_bram[bram_write_index][15:8] <= bram_write_data[15:8];
-                    if (bram_write_be[2]) mem_bram[bram_write_index][23:16] <= bram_write_data[23:16];
-                    if (bram_write_be[3]) mem_bram[bram_write_index][31:24] <= bram_write_data[31:24];
-                    if (bram_write_be[0]) update_debug_byte(bram_write_index, 2'd0, bram_write_data[7:0]);
-                    if (bram_write_be[1]) update_debug_byte(bram_write_index, 2'd1, bram_write_data[15:8]);
-                    if (bram_write_be[2]) update_debug_byte(bram_write_index, 2'd2, bram_write_data[23:16]);
-                    if (bram_write_be[3]) update_debug_byte(bram_write_index, 2'd3, bram_write_data[31:24]);
+                    for (j = 0; j < BYTE_COUNT; j = j + 1) begin
+                        if (bram_write_be[j]) begin
+                            mem_bram[bram_write_index][(8 * j) +: 8] <= bram_write_data[(8 * j) +: 8];
+                            update_debug_byte(((bram_write_index << WORD_SHIFT) + j) >> 2,
+                                              ((bram_write_index << WORD_SHIFT) + j) & 2'b11,
+                                              bram_write_data[(8 * j) +: 8]);
+                        end
+                    end
                 end
             end
         end

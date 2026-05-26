@@ -6,7 +6,9 @@ param(
   [uint32]$IMemBase = 0x00000000,
   [uint32]$IMemBytes = 0x00010000,
   [uint32]$DMemBase = 0x00010000,
-  [uint32]$DMemBytes = 0x00008000
+  [uint32]$DMemBytes = 0x00008000,
+  [ValidateSet(4, 8)]
+  [int]$DMemWordBytes = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,19 +63,25 @@ function Write-RegionWords {
     [hashtable]$Bytes,
     [uint32]$Base,
     [uint32]$SizeBytes,
-    [string]$Path
+    [string]$Path,
+    [ValidateSet(4, 8)]
+    [int]$WordBytes = 4
   )
 
-  $wordCount = [int]($SizeBytes / 4)
+  $wordCount = [int]($SizeBytes / $WordBytes)
   $lines = New-Object System.Collections.Generic.List[string]
   for ($i = 0; $i -lt $wordCount; $i++) {
-    $a = [uint32]($Base + ($i * 4))
-    $b0 = if ($Bytes.ContainsKey($a)) { [uint32]$Bytes[$a] } else { 0 }
-    $b1 = if ($Bytes.ContainsKey($a + 1)) { [uint32]$Bytes[$a + 1] } else { 0 }
-    $b2 = if ($Bytes.ContainsKey($a + 2)) { [uint32]$Bytes[$a + 2] } else { 0 }
-    $b3 = if ($Bytes.ContainsKey($a + 3)) { [uint32]$Bytes[$a + 3] } else { 0 }
-    $word = $b0 -bor ($b1 -shl 8) -bor ($b2 -shl 16) -bor ($b3 -shl 24)
-    $lines.Add(("{0:x8}" -f ($word -band 0xffffffff)))
+    $a = [uint32]($Base + ($i * $WordBytes))
+    $word = [uint64]0
+    for ($j = 0; $j -lt $WordBytes; $j++) {
+      $b = if ($Bytes.ContainsKey($a + $j)) { [uint64]$Bytes[$a + $j] } else { [uint64]0 }
+      $word = $word -bor ($b -shl (8 * $j))
+    }
+    if ($WordBytes -eq 8) {
+      $lines.Add(("{0:x16}" -f $word))
+    } else {
+      $lines.Add(("{0:x8}" -f ([uint32]($word -band 0xffffffff))))
+    }
   }
   Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
 }
@@ -83,34 +91,32 @@ function Write-RegionByteLanes {
     [hashtable]$Bytes,
     [uint32]$Base,
     [uint32]$SizeBytes,
-    [string]$Path
+    [string]$Path,
+    [ValidateSet(4, 8)]
+    [int]$WordBytes = 4
   )
 
-  $wordCount = [int]($SizeBytes / 4)
-  $lane0 = New-Object System.Collections.Generic.List[string]
-  $lane1 = New-Object System.Collections.Generic.List[string]
-  $lane2 = New-Object System.Collections.Generic.List[string]
-  $lane3 = New-Object System.Collections.Generic.List[string]
-  for ($i = 0; $i -lt $wordCount; $i++) {
-    $a = [uint32]($Base + ($i * 4))
-    $b0 = if ($Bytes.ContainsKey($a)) { [uint32]$Bytes[$a] } else { 0 }
-    $b1 = if ($Bytes.ContainsKey($a + 1)) { [uint32]$Bytes[$a + 1] } else { 0 }
-    $b2 = if ($Bytes.ContainsKey($a + 2)) { [uint32]$Bytes[$a + 2] } else { 0 }
-    $b3 = if ($Bytes.ContainsKey($a + 3)) { [uint32]$Bytes[$a + 3] } else { 0 }
-    $lane0.Add(("{0:x2}" -f $b0))
-    $lane1.Add(("{0:x2}" -f $b1))
-    $lane2.Add(("{0:x2}" -f $b2))
-    $lane3.Add(("{0:x2}" -f $b3))
+  $wordCount = [int]($SizeBytes / $WordBytes)
+  $lanes = @()
+  for ($j = 0; $j -lt $WordBytes; $j++) {
+    $lanes += ,(New-Object System.Collections.Generic.List[string])
   }
-  Set-Content -LiteralPath "$Path.b0" -Value $lane0 -Encoding ASCII
-  Set-Content -LiteralPath "$Path.b1" -Value $lane1 -Encoding ASCII
-  Set-Content -LiteralPath "$Path.b2" -Value $lane2 -Encoding ASCII
-  Set-Content -LiteralPath "$Path.b3" -Value $lane3 -Encoding ASCII
+  for ($i = 0; $i -lt $wordCount; $i++) {
+    $a = [uint32]($Base + ($i * $WordBytes))
+    for ($j = 0; $j -lt $WordBytes; $j++) {
+      $b = if ($Bytes.ContainsKey($a + $j)) { [uint32]$Bytes[$a + $j] } else { 0 }
+      $lanes[$j].Add(("{0:x2}" -f $b))
+    }
+  }
+  for ($j = 0; $j -lt $WordBytes; $j++) {
+    Set-Content -LiteralPath "$Path.b$j" -Value $lanes[$j] -Encoding ASCII
+  }
 }
 
-Write-RegionWords -Bytes $bytes -Base $IMemBase -SizeBytes $IMemBytes -Path $imemHex
-Write-RegionWords -Bytes $bytes -Base $DMemBase -SizeBytes $DMemBytes -Path $dmemHex
-Write-RegionByteLanes -Bytes $bytes -Base $DMemBase -SizeBytes $DMemBytes -Path $dmemHex
+Write-RegionWords -Bytes $bytes -Base $IMemBase -SizeBytes $IMemBytes -Path $imemHex -WordBytes 4
+Write-RegionWords -Bytes $bytes -Base $DMemBase -SizeBytes $DMemBytes -Path $dmemHex -WordBytes $DMemWordBytes
+Write-RegionByteLanes -Bytes $bytes -Base $DMemBase -SizeBytes $DMemBytes -Path $dmemHex -WordBytes $DMemWordBytes
 
 Write-Host "IMEM_HEX=$imemHex"
 Write-Host "DMEM_HEX=$dmemHex"
+Write-Host "DMEM_WORD_BYTES=$DMemWordBytes"

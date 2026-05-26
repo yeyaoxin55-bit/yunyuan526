@@ -1,9 +1,9 @@
 module soc_top #(
-    parameter XLEN = 32,
+    parameter XLEN = 64,
     parameter IMEM_DEPTH = 16384,
     parameter DMEM_DEPTH = 8192,
     parameter DMEM_BASE = 32'h00010000,
-    parameter IMEM_INIT_FILE = "sw/uart_hello/uart_hello.hex",
+    parameter IMEM_INIT_FILE = "",
     parameter DMEM_INIT_FILE = "",
     parameter UART_CLKS_PER_BIT = 868,
     parameter MUL_STAGES = 1,
@@ -37,7 +37,7 @@ module soc_top #(
     localparam [31:0] PASS_ADDR        = 32'h00020010;
     localparam [31:0] FAIL_ADDR        = 32'h00020014;
     localparam [31:0] CYCLE_ADDR       = 32'h00020018;
-    localparam [31:0] DMEM_LIMIT       = DMEM_BASE + (DMEM_DEPTH * 4);
+    localparam [31:0] DMEM_LIMIT       = DMEM_BASE + (DMEM_DEPTH * (XLEN / 8));
 
     wire raw_rst = ~sys_rst_n;
     wire clk;
@@ -50,11 +50,11 @@ module soc_top #(
     wire cpu_dmem_read;
     wire cpu_dmem_read_early;
     wire cpu_dmem_write;
-    wire [3:0] cpu_dmem_byte_en;
+    wire [(XLEN/8)-1:0] cpu_dmem_byte_en;
     wire [31:0] cpu_dmem_addr;
-    wire [31:0] cpu_dmem_wdata;
-    wire [31:0] cpu_dmem_rdata;
-    wire [31:0] dmem_rdata;
+    wire [XLEN-1:0] cpu_dmem_wdata;
+    wire [XLEN-1:0] cpu_dmem_rdata;
+    wire [XLEN-1:0] dmem_rdata;
     wire loader_imem_we;
     wire [31:0] loader_imem_addr;
     wire [31:0] loader_imem_wdata;
@@ -124,6 +124,7 @@ module soc_top #(
     );
 
     dmem #(
+        .XLEN(XLEN),
         .DMEM_DEPTH(DMEM_DEPTH),
         .DMEM_BASE(DMEM_BASE),
         .DMEM_INIT_FILE(DMEM_INIT_FILE),
@@ -229,17 +230,17 @@ module soc_top #(
             end
 
             if (cpu_dmem_write && mmio_pass_sel) begin
-                pass_reg <= cpu_dmem_wdata;
+                pass_reg <= cpu_dmem_wdata[31:0];
                 cycle_latched <= cycle_counter;
             end
             if (cpu_dmem_write && mmio_fail_sel) begin
-                fail_reg <= cpu_dmem_wdata;
+                fail_reg <= cpu_dmem_wdata[31:0];
                 cycle_latched <= cycle_counter;
             end
         end
     end
 
-    assign cpu_dmem_rdata = mmio_read_q ? mmio_rdata_q : dmem_rdata;
+    assign cpu_dmem_rdata = mmio_read_q ? {{(XLEN-32){1'b0}}, mmio_rdata_q} : dmem_rdata;
     assign over = (pass_reg != 32'h00000000) || (fail_reg != 32'h00000000);
     assign succ = (pass_reg != 32'h00000000);
     assign halted_ind = unused_board_inputs & 1'b0;
