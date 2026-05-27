@@ -27,6 +27,10 @@ module tb_csr_unit_zicsr;
     wire [31:0] mret_pc_o;
     wire [31:0] mcycle_o;
     wire [31:0] minstret_o;
+    wire [31:0] disabled_read_data_o;
+    wire disabled_read_illegal_o;
+    wire [31:0] disabled_mcycle_o;
+    wire [31:0] disabled_minstret_o;
 
     csr_unit #(.XLEN(32), .HART_ID(0)) dut (
         .clk(clk),
@@ -54,6 +58,34 @@ module tb_csr_unit_zicsr;
         .mret_pc_o(mret_pc_o),
         .mcycle_o(mcycle_o),
         .minstret_o(minstret_o)
+    );
+
+    csr_unit #(.XLEN(32), .HART_ID(0), .SUPPORT_ZICSR(0)) disabled_dut (
+        .clk(clk),
+        .rst(rst),
+        .retire_i(1'b0),
+        .retire_count_i(2'd0),
+        .csr_read_valid_i(csr_read_valid_i),
+        .csr_read_op_i(csr_read_op_i),
+        .csr_read_addr_i(csr_read_addr_i),
+        .csr_read_wdata_i(csr_read_wdata_i),
+        .csr_read_rd_zero_i(csr_read_rd_zero_i),
+        .csr_read_data_o(disabled_read_data_o),
+        .csr_read_illegal_o(disabled_read_illegal_o),
+        .csr_commit_valid_i(csr_commit_valid_i),
+        .csr_commit_op_i(csr_commit_op_i),
+        .csr_commit_addr_i(csr_commit_addr_i),
+        .csr_commit_wdata_i(csr_commit_wdata_i),
+        .csr_commit_rd_zero_i(csr_commit_rd_zero_i),
+        .trap_commit_valid_i(1'b0),
+        .trap_mepc_i(32'h00000000),
+        .trap_mcause_i(32'h00000000),
+        .trap_mtval_i(32'h00000000),
+        .mret_commit_valid_i(1'b0),
+        .trap_pc_o(),
+        .mret_pc_o(),
+        .mcycle_o(disabled_mcycle_o),
+        .minstret_o(disabled_minstret_o)
     );
 
     initial begin
@@ -212,6 +244,19 @@ module tb_csr_unit_zicsr;
 
         csr_commit(`CSR_OP_RS, `CSR_MSCRATCH, 32'h00000000, 1'b0);
         csr_read_expect(`CSR_MSCRATCH, 32'h0000001e);
+
+        csr_commit(`CSR_OP_RW, `CSR_MSCRATCH, 32'haaaaaaaa, 1'b0);
+        csr_read_valid_i = 1'b1;
+        csr_read_op_i = `CSR_OP_RS;
+        csr_read_addr_i = `CSR_MSCRATCH;
+        csr_read_wdata_i = 32'h00000000;
+        csr_read_rd_zero_i = 1'b0;
+        #1;
+        if (!disabled_read_illegal_o || disabled_read_data_o !== 32'h00000000) begin
+            $display("FAIL disabled Zicsr read illegal=%b data=%08x", disabled_read_illegal_o, disabled_read_data_o);
+            $finish;
+        end
+        clear_req();
 
         csr_read_valid_i = 1'b1;
         csr_read_op_i = `CSR_OP_RW;

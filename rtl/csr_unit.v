@@ -214,6 +214,9 @@ module csr_unit #(
     wire [XLEN-1:0] csr_commit_next_value =
         csr_apply_op(csr_commit_op_i, csr_value(csr_commit_addr_i), csr_commit_wdata_i);
     wire csr_commit_do_write = (csr_commit_valid_i === 1'b1) &&
+                               SUPPORT_M &&
+                               SUPPORT_ZICSR &&
+                               csr_op_legal(csr_commit_op_i) &&
                                csr_addr_supported(csr_commit_addr_i) &&
                                !csr_is_read_only(csr_commit_addr_i) &&
                                csr_write_requested(csr_commit_op_i, csr_commit_wdata_i);
