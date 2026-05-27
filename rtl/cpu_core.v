@@ -174,6 +174,9 @@ module cpu_core #(
     wire dec_jump;
     wire dec_jalr;
     wire dec_csr_instr;
+    wire [2:0] dec_csr_op;
+    wire [2:0] dec_sys_event;
+    wire dec_illegal_instr;
     wire dec_m_ext;
 
     wire [31:0] rf_rs1_data;
@@ -272,6 +275,9 @@ module cpu_core #(
         .jump(dec_jump),
         .jalr(dec_jalr),
         .csr_instr(dec_csr_instr),
+        .csr_op(dec_csr_op),
+        .sys_event(dec_sys_event),
+        .illegal_instr(dec_illegal_instr),
         .m_ext(dec_m_ext)
     );
 

@@ -19,6 +19,9 @@ module decoder (
     output reg jump,
     output reg jalr,
     output reg csr_instr,
+    output reg [2:0] csr_op,
+    output reg [2:0] sys_event,
+    output reg illegal_instr,
     output reg m_ext
 );
     assign opcode = instr[6:0];
@@ -46,6 +49,9 @@ module decoder (
         jump = 1'b0;
         jalr = 1'b0;
         csr_instr = 1'b0;
+        csr_op = `CSR_OP_NONE;
+        sys_event = `SYS_EVT_NONE;
+        illegal_instr = 1'b0;
         m_ext = 1'b0;
 
         case (opcode)
@@ -130,10 +136,30 @@ module decoder (
                 end
             end
             `OPCODE_SYSTEM: begin
-                if (funct3 != 3'b000) begin
-                    reg_write = 1'b1;
-                    csr_instr = 1'b1;
-                end
+                case (funct3)
+                    3'b000: begin
+                        if (instr == 32'h00000073) begin
+                            sys_event = `SYS_EVT_ECALL;
+                        end else if (instr == 32'h00100073) begin
+                            sys_event = `SYS_EVT_EBREAK;
+                        end else if (instr == 32'h30200073) begin
+                            sys_event = `SYS_EVT_MRET;
+                        end else begin
+                            sys_event = `SYS_EVT_ILLEGAL;
+                            illegal_instr = 1'b1;
+                        end
+                    end
+                    3'b001: begin csr_instr = 1'b1; csr_op = `CSR_OP_RW;  reg_write = 1'b1; end
+                    3'b010: begin csr_instr = 1'b1; csr_op = `CSR_OP_RS;  reg_write = 1'b1; end
+                    3'b011: begin csr_instr = 1'b1; csr_op = `CSR_OP_RC;  reg_write = 1'b1; end
+                    3'b101: begin csr_instr = 1'b1; csr_op = `CSR_OP_RWI; reg_write = 1'b1; end
+                    3'b110: begin csr_instr = 1'b1; csr_op = `CSR_OP_RSI; reg_write = 1'b1; end
+                    3'b111: begin csr_instr = 1'b1; csr_op = `CSR_OP_RCI; reg_write = 1'b1; end
+                    default: begin
+                        sys_event = `SYS_EVT_ILLEGAL;
+                        illegal_instr = 1'b1;
+                    end
+                endcase
             end
             default: begin
                 imm = 32'h00000000;
