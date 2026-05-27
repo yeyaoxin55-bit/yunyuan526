@@ -90,7 +90,10 @@ module csr_unit #(
     function [XLEN-1:0] mask_mtvec;
         input [XLEN-1:0] value;
         begin
-            mask_mtvec = {value[XLEN-1:2], 1'b0, value[0]};
+            case (value[1:0])
+                2'b01: mask_mtvec = {value[XLEN-1:2], 2'b01};
+                default: mask_mtvec = {value[XLEN-1:2], 2'b00};
+            endcase
         end
     endfunction
 
@@ -210,6 +213,19 @@ module csr_unit #(
 
     wire [XLEN-1:0] csr_commit_next_value =
         csr_apply_op(csr_commit_op_i, csr_value(csr_commit_addr_i), csr_commit_wdata_i);
+    wire csr_commit_do_write = (csr_commit_valid_i === 1'b1) &&
+                               csr_addr_supported(csr_commit_addr_i) &&
+                               !csr_is_read_only(csr_commit_addr_i) &&
+                               csr_write_requested(csr_commit_op_i, csr_commit_wdata_i);
+    wire normal_csr_commit_active = (trap_commit_valid_i !== 1'b1) &&
+                                    (mret_commit_valid_i !== 1'b1) &&
+                                    csr_commit_do_write;
+    wire csr_commit_mcycle = normal_csr_commit_active &&
+                             ((csr_commit_addr_i == `CSR_MCYCLE) ||
+                              ((XLEN == 32) && (csr_commit_addr_i == `CSR_MCYCLEH)));
+    wire csr_commit_minstret = normal_csr_commit_active &&
+                               ((csr_commit_addr_i == `CSR_MINSTRET) ||
+                                ((XLEN == 32) && (csr_commit_addr_i == `CSR_MINSTRETH)));
 
     always @(*) begin
         csr_read_data_o = csr_value(csr_read_addr_i);
@@ -237,8 +253,10 @@ module csr_unit #(
             mtval_r <= {XLEN{1'b0}};
             mip_r <= {XLEN{1'b0}};
         end else begin
-            mcycle_r <= mcycle_r + 64'h0000000000000001;
-            if (retire_i === 1'b1) begin
+            if (!csr_commit_mcycle) begin
+                mcycle_r <= mcycle_r + 64'h0000000000000001;
+            end
+            if ((retire_i === 1'b1) && !csr_commit_minstret) begin
                 minstret_r <= minstret_r + {62'h0000000000000000, retire_count_i};
             end
 
@@ -249,19 +267,12 @@ module csr_unit #(
                 mstatus_r <= (mstatus_r & ~(MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP)) |
                              (mstatus_r[MSTATUS_MIE_BIT] ? MSTATUS_MPIE : ZERO) |
                              MSTATUS_MPP;
-            end
-
-            if (mret_commit_valid_i === 1'b1) begin
+            end else if (mret_commit_valid_i === 1'b1) begin
                 mstatus_r <= (mstatus_r & ~(MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP)) |
                              (mstatus_r[MSTATUS_MPIE_BIT] ? MSTATUS_MIE : ZERO) |
                              MSTATUS_MPIE |
                              MSTATUS_MPP;
-            end
-
-            if ((csr_commit_valid_i === 1'b1) &&
-                csr_addr_supported(csr_commit_addr_i) &&
-                !csr_is_read_only(csr_commit_addr_i) &&
-                csr_write_requested(csr_commit_op_i, csr_commit_wdata_i)) begin
+            end else if (normal_csr_commit_active) begin
                 case (csr_commit_addr_i)
                     `CSR_MSTATUS: mstatus_r <= mask_mstatus(csr_commit_next_value);
                     `CSR_MIE: mie_r <= csr_commit_next_value & MIE_MIP_MASK;

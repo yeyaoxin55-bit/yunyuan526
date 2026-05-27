@@ -129,6 +129,35 @@ module tb_csr_unit_zicsr;
         end
     endtask
 
+    task csr_commit_with_retire;
+        input [2:0] op;
+        input [11:0] addr;
+        input [31:0] data;
+        input [1:0] count;
+        begin
+            csr_read_valid_i = 1'b1;
+            csr_read_op_i = op;
+            csr_read_addr_i = addr;
+            csr_read_wdata_i = data;
+            csr_read_rd_zero_i = 1'b0;
+            #1;
+            if (csr_read_illegal_o) begin
+                $display("FAIL unexpected illegal CSR addr=%03x op=%0d", addr, op);
+                $finish;
+            end
+            retire_i = 1'b1;
+            retire_count_i = count;
+            csr_commit_valid_i = 1'b1;
+            csr_commit_op_i = op;
+            csr_commit_addr_i = addr;
+            csr_commit_wdata_i = data;
+            csr_commit_rd_zero_i = 1'b0;
+            @(posedge clk);
+            #1;
+            clear_req();
+        end
+    endtask
+
     initial begin
         clear_req();
         rst = 1'b1;
@@ -154,6 +183,23 @@ module tb_csr_unit_zicsr;
         csr_read_expect(`CSR_MINSTRET, 32'h01020304);
         csr_commit(`CSR_OP_RW, `CSR_MINSTRETH, 32'h11223344, 1'b0);
         csr_read_expect(`CSR_MINSTRETH, 32'h11223344);
+
+        csr_commit(`CSR_OP_RW, `CSR_MCYCLEH, 32'h00000000, 1'b0);
+        csr_commit(`CSR_OP_RW, `CSR_MCYCLE, 32'hffffffff, 1'b0);
+        csr_commit(`CSR_OP_RW, `CSR_MCYCLE, 32'h00000010, 1'b0);
+        csr_read_expect(`CSR_MCYCLEH, 32'h00000000);
+        csr_read_expect(`CSR_MCYCLE, 32'h00000010);
+
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRETH, 32'h00000000, 1'b0);
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRET, 32'hffffffff, 1'b0);
+        csr_commit_with_retire(`CSR_OP_RW, `CSR_MINSTRET, 32'h00000020, 2'd3);
+        csr_read_expect(`CSR_MINSTRETH, 32'h00000000);
+        csr_read_expect(`CSR_MINSTRET, 32'h00000020);
+
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRET, 32'hfffffffe, 1'b0);
+        csr_commit_with_retire(`CSR_OP_RW, `CSR_MINSTRETH, 32'h00000022, 2'd3);
+        csr_read_expect(`CSR_MINSTRETH, 32'h00000022);
+        csr_read_expect(`CSR_MINSTRET, 32'hfffffffe);
 
         csr_commit(`CSR_OP_RWI, `CSR_MSCRATCH, 32'h0000001f, 1'b0);
         csr_read_expect(`CSR_MSCRATCH, 32'h0000001f);

@@ -135,8 +135,16 @@ module tb_csr_unit_trap_mret;
         rst = 1'b0;
         @(posedge clk);
 
-        csr_commit(`CSR_OP_RW, `CSR_MTVEC, 32'h80000103);
+        csr_commit(`CSR_OP_RW, `CSR_MTVEC, 32'h80000101);
         csr_read_expect(`CSR_MTVEC, 32'h80000101);
+        #1;
+        if (trap_pc_o !== 32'h80000100) begin
+            $display("FAIL trap_pc BASE expected=80000100 got=%08x", trap_pc_o);
+            $finish;
+        end
+
+        csr_commit(`CSR_OP_RW, `CSR_MTVEC, 32'h80000103);
+        csr_read_expect(`CSR_MTVEC, 32'h80000100);
         #1;
         if (trap_pc_o !== 32'h80000100) begin
             $display("FAIL trap_pc BASE expected=80000100 got=%08x", trap_pc_o);
@@ -168,6 +176,47 @@ module tb_csr_unit_trap_mret;
         #1;
         clear_req();
 
+        csr_read_expect(`CSR_MSTATUS, 32'h00001888);
+
+        trap_commit_valid_i = 1'b1;
+        trap_mepc_i = 32'h00000445;
+        trap_mcause_i = `CAUSE_BREAKPOINT;
+        trap_mtval_i = 32'h00000000;
+        csr_commit_valid_i = 1'b1;
+        csr_commit_op_i = `CSR_OP_RW;
+        csr_commit_addr_i = `CSR_MEPC;
+        csr_commit_wdata_i = 32'hdeadbeef;
+        csr_commit_rd_zero_i = 1'b0;
+        @(posedge clk);
+        #1;
+        clear_req();
+        csr_read_expect(`CSR_MEPC, 32'h00000444);
+        csr_read_expect(`CSR_MCAUSE, `CAUSE_BREAKPOINT);
+
+        csr_commit(`CSR_OP_RW, `CSR_MSTATUS, 32'h00000008);
+        trap_commit_valid_i = 1'b1;
+        trap_mepc_i = 32'h00000500;
+        trap_mcause_i = `CAUSE_ECALL_MMODE;
+        trap_mtval_i = 32'h00000000;
+        csr_commit_valid_i = 1'b1;
+        csr_commit_op_i = `CSR_OP_RW;
+        csr_commit_addr_i = `CSR_MSTATUS;
+        csr_commit_wdata_i = 32'h00000000;
+        csr_commit_rd_zero_i = 1'b0;
+        @(posedge clk);
+        #1;
+        clear_req();
+        csr_read_expect(`CSR_MSTATUS, 32'h00001880);
+
+        mret_commit_valid_i = 1'b1;
+        csr_commit_valid_i = 1'b1;
+        csr_commit_op_i = `CSR_OP_RW;
+        csr_commit_addr_i = `CSR_MSTATUS;
+        csr_commit_wdata_i = 32'h00000000;
+        csr_commit_rd_zero_i = 1'b0;
+        @(posedge clk);
+        #1;
+        clear_req();
         csr_read_expect(`CSR_MSTATUS, 32'h00001888);
 
         $display("PASS csr_unit trap/mret regression completed");
