@@ -76,6 +76,20 @@ module csr_unit #(
         end
     endfunction
 
+    function [XLEN-1:0] mask_mstatus;
+        input [XLEN-1:0] value;
+        begin
+            mask_mstatus = (value & MSTATUS_MASK) | MSTATUS_MPP;
+        end
+    endfunction
+
+    function [XLEN-1:0] mask_mtvec;
+        input [XLEN-1:0] value;
+        begin
+            mask_mtvec = {value[XLEN-1:2], 1'b0, value[0]};
+        end
+    endfunction
+
     function csr_is_read_only;
         input [11:0] addr;
         begin
@@ -242,9 +256,9 @@ module csr_unit #(
                 !csr_is_read_only(csr_commit_addr_i) &&
                 csr_write_requested(csr_commit_op_i, csr_commit_wdata_i)) begin
                 case (csr_commit_addr_i)
-                    `CSR_MSTATUS: mstatus_r <= csr_apply_op(csr_commit_op_i, mstatus_r, csr_commit_wdata_i) & MSTATUS_MASK;
+                    `CSR_MSTATUS: mstatus_r <= mask_mstatus(csr_apply_op(csr_commit_op_i, mstatus_r, csr_commit_wdata_i));
                     `CSR_MIE: mie_r <= csr_apply_op(csr_commit_op_i, mie_r, csr_commit_wdata_i) & MIE_MIP_MASK;
-                    `CSR_MTVEC: mtvec_r <= csr_apply_op(csr_commit_op_i, mtvec_r, csr_commit_wdata_i) & {{(XLEN-2){1'b1}}, 2'b00};
+                    `CSR_MTVEC: mtvec_r <= mask_mtvec(csr_apply_op(csr_commit_op_i, mtvec_r, csr_commit_wdata_i));
                     `CSR_MSCRATCH: mscratch_r <= csr_apply_op(csr_commit_op_i, mscratch_r, csr_commit_wdata_i);
                     `CSR_MEPC: mepc_r <= mask_mepc(csr_apply_op(csr_commit_op_i, mepc_r, csr_commit_wdata_i));
                     `CSR_MCAUSE: mcause_r <= csr_apply_op(csr_commit_op_i, mcause_r, csr_commit_wdata_i);

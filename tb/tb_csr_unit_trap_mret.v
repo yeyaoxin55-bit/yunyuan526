@@ -136,6 +136,7 @@ module tb_csr_unit_trap_mret;
         @(posedge clk);
 
         csr_commit(`CSR_OP_RW, `CSR_MTVEC, 32'h80000103);
+        csr_read_expect(`CSR_MTVEC, 32'h80000101);
         #1;
         if (trap_pc_o !== 32'h80000100) begin
             $display("FAIL trap_pc BASE expected=80000100 got=%08x", trap_pc_o);
@@ -143,6 +144,7 @@ module tb_csr_unit_trap_mret;
         end
 
         csr_commit(`CSR_OP_RW, `CSR_MSTATUS, 32'h00000008);
+        csr_read_expect(`CSR_MSTATUS, 32'h00001808);
         trap_commit_valid_i = 1'b1;
         trap_mepc_i = 32'h00000123;
         trap_mcause_i = `CAUSE_ILLEGAL_INSTRUCTION;
