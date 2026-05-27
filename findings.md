@@ -502,3 +502,60 @@
 - Route-only `Explore + AggressiveExplore` from the accepted Phase 48 placement was also not useful. It ended at WNS `-0.193 ns`, TNS `-2.977 ns`, with 36 setup failing endpoints. The accepted `AdvancedSkewModeling` artifact remains better at WNS `0.007 ns`.
 - Current board candidate remains `build/vivado_impl_soc_top_coremark30_mul_early_boundary_adv_skew/soc_top_physopt.bit`: CoreMark 50 `16263300`, about `3.074 CoreMark/MHz`, LUT `6780`, FF `8280`, BRAM36 `24`, DSP `12`, WNS `0.007 ns`.
 - Next promising work should target the DMEM/load-response-to-EX-result cone directly, or add a controlled replay boundary only for a narrower consumer class. Re-enabling broad early replay or increasing predictor pressure should not be retried without a new architectural timing boundary.
+## 2026-05-27 CSR Branch Initial Findings
+- Current branch: `新增CSR`; `git status --short` showed no tracked/untracked changes at the start of this CSR pass.
+- Existing CSR hardware is minimal:
+  - `rtl/csr_unit.v` only implements `mcycle` and `minstret` counters.
+  - `rtl/cpu_core.v` reads only CSR addresses `0xB00` (`mcycle`) and `0xB02` (`minstret`), returning zero for everything else.
+  - `decoder.v` marks `OPCODE_SYSTEM` with `funct3 != 0` as a CSR instruction and always enables register writeback, but there is no CSR write/update path.
+  - `exception.v` is a standalone placeholder for illegal/load/store misaligned causes and is not integrated into the pipeline trap flow.
+- Existing CSR regression is `tb/tb_csr_counter.v` plus `tb/programs/csr_counter.hex`; it only checks `csrr mcycle` and `csrr minstret`.
+- Existing CoreMark code reads `mcycle` using `csrr`, so the current subset is enough for benchmarking but not enough for privileged/software bring-up.
+- Official `riscv-tests` includes `rv32mi` CSR/trap tests, but the current local `sw/riscv-tests-env/riscv_test.h` is a user-mode oriented minimal harness and does not yet provide a machine trap setup suitable for those tests.
+- Main CSR gaps for an industrial-style RV32IM machine-mode core:
+  - CSRRW/CSRRS/CSRRC and immediate variants need read-modify-write semantics.
+  - Machine CSRs such as `mstatus`, `misa`, `mie`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `mip`, `mcycle`, and `minstret` need defined behavior.
+  - `ecall`, `ebreak`, `mret`, illegal instruction, misaligned fetch/load/store, and interrupt/trap redirect behavior need a precise pipeline integration point.
+  - The implementation must preserve existing CoreMark/timing-sensitive behavior and avoid adding broad combinational paths into redirect/load-response critical regions.
+- Parameterization requirement:
+  - CSR data paths, CSR registers, trap PC/mtval/mepc values, and read/write masks should use `XLEN`.
+  - RV32 and RV64 differ in `misa.MXL`, `mstatus` high fields, and counter width exposure, so these must be represented by helper constants/masks instead of hard-coded 32-bit literals.
+- Current `cpu_core.v` control structure relevant to trap integration:
+  - Existing redirect/flush is built around branch mispredict and jump flush detection; there is no trap/mret redirect class yet.
+  - `frontend_flush` feeds the prefetch flush path; adding trap/mret should reuse this path rather than creating a separate front-end kill mechanism.
+  - `dmem_write` is already gated by `!replay_flush`, but first-stage CSR work needs a more general kill/commit gate for store, CSR write, branch predictor update, register write, and long-latency M-extension issue.
+  - Branch predictor update currently uses `ctrl_valid && ctrl_branch && !pipe_wait` and ID-stage JAL update; trap/mret must prevent wrong-path predictor updates.
+  - Existing `ctrl_pending_conflict_stall` already treats CSR instructions as side-effecting during pending load-control replay, which supports the design choice that CSR updates must occur only at a safe commit boundary.
+- RISC-V official spec notes used for design:
+  - Zicsr CSR instructions atomically read-modify-write a 12-bit CSR address and have special read/write suppression rules for `rd=x0`, `rs1=x0`, and `uimm=0`.
+  - `mtvec` direct mode sends traps to BASE; vectored mode changes only asynchronous interrupt targets, so first-stage synchronous-only trap handling can use BASE for all traps.
+  - On M-mode trap entry, `mepc`, `mcause`, and optionally `mtval` are written and `mstatus.MIE/MPIE/MPP` are updated.
+  - `mret` restores interrupt enable state and jumps to `mepc`.
+- User-approved first-stage CSR/trap scope:
+  - Handle only M-mode synchronous exceptions and Zicsr.
+  - Do not implement S/U mode, PMP, MMU, timer/software/external interrupt response, CLINT, or PLIC.
+  - Keep `mie`, `mip`, and `mstatus.MIE` as register foundations for later interrupts, but do not trigger asynchronous traps in this phase.
+  - Trap causes: instruction address misaligned 0, illegal instruction 2, breakpoint 3, load address misaligned 4, store/AMO address misaligned 6, environment call from M-mode 11.
+  - `mtval`: illegal instruction/illegal CSR writes original 32-bit instruction zero-extended to XLEN; instruction address misaligned writes the bad control-flow target; load/store misaligned writes the effective address; ecall/ebreak writes zero.
+  - Legal `mret` is a redirect, not an exception; illegal `mret` forms trap cause 2.
+  - Trap/mret/older flush kill gates must cover register writes, load/mul shared writeback, DMEM writes, CSR writes, trap entry, mret recovery, predictor update, RAS update, M-extension issue, replay capture, and `minstret` counting.
+- CSR table design direction:
+  - Implement readable machine CSRs: `mstatus`, `misa`, `mie`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `mip`, `mcycle`, and `minstret`.
+  - Keep `mvendorid`, `marchid`, `mimpid`, and `mhartid` as read-only identity CSRs. `mhartid` returns the `HART_ID` parameter; the other identity CSRs may return zero in this first stage.
+  - Treat unimplemented or privilege-invalid CSR access as illegal instruction trap.
+  - Treat writes to read-only CSRs as illegal instruction trap.
+  - Use WARL masks for writable CSRs rather than storing arbitrary bits.
+- Verification design direction:
+  - Use test-first development for every CSR/trap behavior: add a focused failing test, verify it fails for the expected missing behavior, then implement the minimal RTL.
+  - Start with `csr_unit` unit tests for Zicsr semantics and CSR bank state because these isolate XLEN, WARL, trap entry, and mret behavior from pipeline hazards.
+  - Add CPU-level program tests only after CSR unit behavior is proven, so failures can be attributed to pipeline integration rather than CSR bank semantics.
+  - Add at least one `XLEN=64` compile/unit smoke for `csr_unit`; the full CPU can remain RV32 in this phase.
+
+## 2026-05-27 CSR Phase 50 Findings
+- The first-stage CSR implementation now covers the approved M-mode synchronous scope: Zicsr CSR read/write semantics, an XLEN-parameterized M-mode CSR bank, trap entry, MRET restore, ECALL, EBREAK, illegal CSR access, general illegal instruction decode, load/store address misaligned traps, and branch/JAL/JALR instruction-address-misaligned traps.
+- `csr_unit` is the single owner of CSR state. `cpu_core` only issues normal CSR commit, trap entry, and MRET commit requests at controlled pipeline boundaries, while keeping redirect, flush, younger-instruction kill, and side-effect gating in core control.
+- The conservative CSR hazard is intentionally broader than only CSR-after-CSR. Branch/jump/load/store instructions can themselves create trap entries, so they now wait behind an older CSR write to avoid trapping through stale `mtvec`/CSR state. The CoreMark 2 smoke changed only from the previous CSR-pass `649738`-class result to `649739`, so the functional safety cost is currently negligible at this smoke size.
+- Official `rv32mi/csr` and `rv32mi/mcsr` now pass after the riscv-test scripts default to `rv32im_zicsr_zifencei` and the local test environment includes official `encoding.h`.
+- Official `rv32mi` trap programs are not yet valid acceptance tests in this repo. `rv32mi/illegal` still times out with no pass/fail marker because the local minimal `sw/riscv-tests-env/riscv_test.h` does not install the official machine trap-vector startup handler. A real machine-mode riscv-test environment should be added before using official `illegal`, `scall`, `sbreak`, or misaligned trap tests as sign-off.
+- The first-stage implementation deliberately does not implement S/U mode, PMP, MMU, CLINT, PLIC, timer/software/external interrupt response, or asynchronous trap taking. `mie`, `mip`, and `mstatus.MIE` exist as future interrupt foundations only.
+- No new Vivado timing sign-off was run for this CSR branch. Functional sign-off currently consists of focused CSR trap programs, CSR unit tests including XLEN64, full ModelSim regression, official rv32ui/rv32um simulation, official rv32mi CSR smoke, and a short CoreMark smoke.

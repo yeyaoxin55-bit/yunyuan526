@@ -80,10 +80,22 @@ module decoder (
                 wb_sel = 2'd2;
                 jump = 1'b1;
                 jalr = 1'b1;
+                if (funct3 != 3'b000) begin
+                    illegal_instr = 1'b1;
+                end
             end
             `OPCODE_BRANCH: begin
                 imm = imm_b;
                 branch = 1'b1;
+                case (funct3)
+                    3'b000,
+                    3'b001,
+                    3'b100,
+                    3'b101,
+                    3'b110,
+                    3'b111: illegal_instr = 1'b0;
+                    default: illegal_instr = 1'b1;
+                endcase
             end
             `OPCODE_LOAD: begin
                 imm = imm_i;
@@ -92,12 +104,26 @@ module decoder (
                 reg_write = 1'b1;
                 mem_read = 1'b1;
                 wb_sel = 2'd1;
+                case (funct3)
+                    3'b000,
+                    3'b001,
+                    3'b010,
+                    3'b100,
+                    3'b101: illegal_instr = 1'b0;
+                    default: illegal_instr = 1'b1;
+                endcase
             end
             `OPCODE_STORE: begin
                 imm = imm_s;
                 alu_op = `ALU_ADD;
                 alu_src_imm = 1'b1;
                 mem_write = 1'b1;
+                case (funct3)
+                    3'b000,
+                    3'b001,
+                    3'b010: illegal_instr = 1'b0;
+                    default: illegal_instr = 1'b1;
+                endcase
             end
             `OPCODE_OP_IMM: begin
                 imm = imm_i;
@@ -110,8 +136,15 @@ module decoder (
                     3'b100: alu_op = `ALU_XOR;
                     3'b110: alu_op = `ALU_OR;
                     3'b111: alu_op = `ALU_AND;
-                    3'b001: alu_op = `ALU_SLL;
-                    3'b101: alu_op = instr[30] ? `ALU_SRA : `ALU_SRL;
+                    3'b001: begin
+                        alu_op = `ALU_SLL;
+                        illegal_instr = (funct7 != 7'b0000000);
+                    end
+                    3'b101: begin
+                        alu_op = instr[30] ? `ALU_SRA : `ALU_SRL;
+                        illegal_instr = !((funct7 == 7'b0000000) ||
+                                          (funct7 == 7'b0100000));
+                    end
                     default: alu_op = `ALU_ADD;
                 endcase
             end
@@ -119,21 +152,30 @@ module decoder (
                 reg_write = 1'b1;
                 if (funct7 == 7'b0000001) begin
                     m_ext = 1'b1;
-                end else begin
+                end else if (funct7 == 7'b0000000) begin
                     case ({funct7[5], funct3})
                         4'b0_000: alu_op = `ALU_ADD;
-                        4'b1_000: alu_op = `ALU_SUB;
                         4'b0_001: alu_op = `ALU_SLL;
                         4'b0_010: alu_op = `ALU_SLT;
                         4'b0_011: alu_op = `ALU_SLTU;
                         4'b0_100: alu_op = `ALU_XOR;
                         4'b0_101: alu_op = `ALU_SRL;
-                        4'b1_101: alu_op = `ALU_SRA;
                         4'b0_110: alu_op = `ALU_OR;
                         4'b0_111: alu_op = `ALU_AND;
                         default:  alu_op = `ALU_ADD;
                     endcase
+                end else if (funct7 == 7'b0100000) begin
+                    case (funct3)
+                        3'b000: alu_op = `ALU_SUB;
+                        3'b101: alu_op = `ALU_SRA;
+                        default: illegal_instr = 1'b1;
+                    endcase
+                end else begin
+                    illegal_instr = 1'b1;
                 end
+            end
+            `OPCODE_MISC_MEM: begin
+                illegal_instr = (funct3 != 3'b000);
             end
             `OPCODE_SYSTEM: begin
                 case (funct3)
@@ -163,6 +205,7 @@ module decoder (
             end
             default: begin
                 imm = 32'h00000000;
+                illegal_instr = 1'b1;
             end
         endcase
     end

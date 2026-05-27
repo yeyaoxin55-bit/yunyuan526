@@ -488,3 +488,26 @@
   - applicable official `rv32ui` excluding unsupported `fence_i`;
   - full `rv32um`;
   - CoreMark 50 confirmation.
+## Phase 50 CSR Industrialization Design - First-Stage Complete
+- Goal: design a staged CSR/trap implementation for the `新增CSR` branch that upgrades the current counter-only CSR subset toward a practical machine-mode RV32IM CSR system.
+- Current status: first-stage M-mode synchronous CSR/trap implementation is complete and verified in simulation.
+- Implementation planning status: design spec is approved and an implementation plan has been written at `docs/superpowers/plans/2026-05-27-machine-mode-csr.md`.
+- Implemented first-stage scope:
+  - Zicsr read/write semantics for register and immediate CSR instructions.
+  - Machine-mode CSR bank with standard machine CSRs needed by bare-metal runtime and traps.
+  - Synchronous trap and `mret` redirect integration for ECALL, EBREAK, illegal CSR, general illegal instruction, load/store address misaligned, and branch/JAL/JALR instruction-address-misaligned events.
+  - XLEN-parameterized CSR unit coverage, including an XLEN64 unit-test smoke.
+- Design constraints:
+  - Preserve existing CoreMark behavior and current timing-sensitive pipeline boundaries.
+  - Keep CSR/trap logic XLEN-parameterized so the same structure can support RV32 and RV64.
+  - Add tests before RTL changes.
+  - Keep the first implementation milestone small enough for ModelSim and official riscv-test smoke verification.
+- Acceptance evidence:
+  - CSR trap programs passed for `csr_rw`, `ecall_mret`, `ebreak`, `illegal_csr`, `illegal_instr`, `misaligned_store`, `misaligned_load`, `misaligned_branch`, `misaligned_jal`, and `misaligned_jalr`.
+  - `scripts/check_project.ps1`, `scripts/run_csr_unit_modelsim.ps1`, and full `scripts/run_modelsim.ps1` passed.
+  - Official `rv32ui` selected suite and full `rv32um` passed.
+  - Official `rv32mi` CSR smoke `csr,mcsr` passed.
+  - CoreMark 2 smoke passed with measured cycles `649739`.
+- Known remaining work:
+  - Add a real machine-mode riscv-test startup/trap harness before treating official `rv32mi` trap tests as acceptance.
+  - Async interrupt response, CLINT/PLIC, PMP, MMU, S/U mode, and Vivado timing sign-off remain outside this first stage.

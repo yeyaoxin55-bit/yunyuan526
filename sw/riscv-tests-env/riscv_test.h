@@ -1,6 +1,8 @@
 #ifndef YL3_RISCV_TEST_H
 #define YL3_RISCV_TEST_H
 
+#include "encoding.h"
+
 #define RVTEST_RV64U
 #define RVTEST_RV64UF
 #define RVTEST_RV64UV

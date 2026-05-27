@@ -3,7 +3,7 @@ param(
   [string]$TestSource,
   [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
   [string]$OutDir = "build/riscv-tests",
-  [string]$March = "rv32im_zifencei",
+  [string]$March = "rv32im_zicsr_zifencei",
   [string]$Mabi = "ilp32"
 )
 
@@ -36,6 +36,7 @@ $elf = Join-Path $resolvedOutDir "$name.elf"
 $map = Join-Path $resolvedOutDir "$name.map"
 $linker = Join-Path $repoRoot "sw\linker\yl3_rv32im.ld"
 $envInclude = Join-Path $repoRoot "sw\riscv-tests-env"
+$officialEnvInclude = Join-Path $repoRoot "riscv-tests\env"
 $macroInclude = Join-Path $repoRoot "riscv-tests\isa\macros\scalar"
 $isaInclude = Join-Path $repoRoot "riscv-tests\isa"
 $resolvedSource = (Resolve-Path -LiteralPath $TestSource).Path
@@ -48,6 +49,7 @@ $resolvedSource = (Resolve-Path -LiteralPath $TestSource).Path
   "-ffreestanding" `
   "-x" "assembler-with-cpp" `
   "-I" $envInclude `
+  "-I" $officialEnvInclude `
   "-I" $macroInclude `
   "-I" $isaInclude `
   "-T" $linker `

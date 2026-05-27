@@ -302,6 +302,7 @@ module cpu_core #(
     wire mret_redirect_detect;
     wire [31:0] ex_trap_cause;
     wire [31:0] ex_trap_tval;
+    wire [31:0] ex_trap_mepc;
 
     csr_unit #(
         .XLEN(32),
@@ -324,7 +325,7 @@ module cpu_core #(
         .csr_commit_wdata_i(ex_mem_csr_wdata),
         .csr_commit_rd_zero_i(ex_mem_csr_rd_zero),
         .trap_commit_valid_i(trap_redirect_detect),
-        .trap_mepc_i(id_ex_pc),
+        .trap_mepc_i(ex_trap_mepc),
         .trap_mcause_i(ex_trap_cause),
         .trap_mtval_i(ex_trap_tval),
         .mret_commit_valid_i(mret_redirect_detect),
@@ -361,7 +362,11 @@ module cpu_core #(
     wire id_ex_is_mul = id_ex_valid && id_ex_m_ext && !id_ex_funct3[2];
     wire if_id_csr_state_reader = dec_csr_instr ||
                                   (dec_sys_event != `SYS_EVT_NONE) ||
-                                  dec_illegal_instr;
+                                  dec_illegal_instr ||
+                                  dec_branch ||
+                                  dec_jump ||
+                                  dec_mem_read ||
+                                  dec_mem_write;
     wire csr_hazard_stall = if_id_valid &&
                              if_id_csr_state_reader &&
                              id_ex_valid &&
@@ -790,6 +795,9 @@ module cpu_core #(
     wire [31:0] branch_target = ctrl_pc + ctrl_imm;
     wire [31:0] jalr_target = (ctrl_rs1_data + ctrl_imm) & 32'hffff_fffe;
     wire [31:0] redirect_target_pc = ctrl_jalr ? jalr_target : branch_target;
+    wire ctrl_target_misaligned = ctrl_valid &&
+                                  ((ctrl_branch && branch_taken) || ctrl_jump) &&
+                                  (|redirect_target_pc[1:0]);
     wire [31:0] redirect_fallthrough_pc = ctrl_pc + 32'd4;
     wire [31:0] redirect_pc = redirect_csr_flush ? redirect_pc_q :
                                 redirect_jump_flush ? redirect_pc_q :
@@ -813,6 +821,7 @@ module cpu_core #(
     wire ex_trap_valid = id_ex_valid &&
                          (id_ex_illegal_instr ||
                           id_ex_illegal_csr ||
+                          ctrl_target_misaligned ||
                           id_ex_ecall ||
                           id_ex_ebreak ||
                           ex_load_misaligned ||
@@ -821,14 +830,17 @@ module cpu_core #(
     wire id_ex_faulting = ex_trap_valid || ex_mret_valid;
     assign ex_trap_cause =
         (id_ex_illegal_instr || id_ex_illegal_csr) ? `CAUSE_ILLEGAL_INSTRUCTION :
+        ctrl_target_misaligned ? `CAUSE_INSTR_ADDR_MISALIGNED :
         id_ex_ebreak ? `CAUSE_BREAKPOINT :
         id_ex_ecall ? `CAUSE_ECALL_MMODE :
         ex_load_misaligned ? `CAUSE_LOAD_ADDR_MISALIGNED :
         `CAUSE_STORE_ADDR_MISALIGNED;
     assign ex_trap_tval =
         (id_ex_illegal_instr || id_ex_illegal_csr) ? id_ex_instr :
+        ctrl_target_misaligned ? redirect_target_pc :
         (ex_load_misaligned || ex_store_misaligned) ? ex_effective_addr :
         32'h00000000;
+    assign ex_trap_mepc = ctrl_target_misaligned ? ctrl_pc : id_ex_pc;
     assign trap_redirect_detect = !redirect_valid && !pipe_wait && ex_trap_valid;
     assign mret_redirect_detect = !redirect_valid && !pipe_wait && ex_mret_valid;
     wire csr_redirect_detect = trap_redirect_detect || mret_redirect_detect;
@@ -881,7 +893,13 @@ module cpu_core #(
     wire [31:0] predict_target;
     wire [31:0] predicted_next_pc = predict_taken ? predict_target : (pc + 32'd4);
     wire [31:0] id_jal_target = if_id_pc + dec_imm;
+    wire [31:0] id_jalr_target = (rf_rs1_data + dec_imm) & 32'hffff_fffe;
+    wire id_jal_target_misaligned = if_id_valid && dec_jump && !dec_jalr &&
+                                    (|id_jal_target[1:0]);
+    wire id_jalr_target_misaligned = if_id_valid && dec_jump && dec_jalr &&
+                                     (|id_jalr_target[1:0]);
     wire id_jal_predicted_hit = if_id_valid && dec_jump && !dec_jalr &&
+                                !id_jal_target_misaligned &&
                                 if_id_pred_taken &&
                                 (if_id_pred_target == id_jal_target);
     wire ras_valid = ras_count != 4'd0;
@@ -894,6 +912,7 @@ module cpu_core #(
                       ((dec_rs1 == 5'd1) || (dec_rs1 == 5'd5)) &&
                       (dec_imm == 32'h00000000);
     wire id_jal_redirect = if_id_valid && dec_jump && !dec_jalr &&
+                           !id_jal_target_misaligned &&
                            !csr_redirect_detect &&
                            !pipe_wait &&
                            !hazard_stall &&
@@ -904,6 +923,7 @@ module cpu_core #(
                            !id_jal_predicted_hit &&
                            !flush;
     wire id_jalr_ras_redirect = if_id_valid && dec_return && ras_valid &&
+                                !id_jalr_target_misaligned &&
                                 !csr_redirect_detect &&
                                 !pipe_wait &&
                                 !hazard_stall &&
@@ -926,7 +946,7 @@ module cpu_core #(
                            !ctrl_pending_conflict_stall &&
                            !ctrl_load_pending_valid &&
                            !ctrl_replay_valid;
-    wire ras_push = id_stage_accept && dec_call;
+    wire ras_push = id_stage_accept && dec_call && !id_jal_target_misaligned;
     wire ras_pop = id_jalr_ras_redirect;
     wire id_load_early_read = (ENABLE_ID_LOAD_EARLY_READ != 0) &&
                               if_id_valid &&

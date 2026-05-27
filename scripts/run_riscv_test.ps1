@@ -2,7 +2,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$TestSource,
   [string]$ToolPrefix = "xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf-",
-  [string]$March = "rv32im_zifencei",
+  [string]$March = "rv32im_zicsr_zifencei",
   [string]$Mabi = "ilp32",
   [int]$MaxCycles = 200000,
   [int]$MulStages = 1,
