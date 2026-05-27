@@ -44,6 +44,8 @@ module csr_unit #(
     localparam [XLEN-1:0] MSTATUS_MPIE = {{(XLEN-8){1'b0}}, 1'b1, 7'b0000000};
     localparam [XLEN-1:0] MSTATUS_MPP  = {{(XLEN-13){1'b0}}, 2'b11, 11'b00000000000};
     localparam [XLEN-1:0] MSTATUS_MASK = MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP;
+    localparam MSTATUS_MIE_BIT = 3;
+    localparam MSTATUS_MPIE_BIT = 7;
     localparam [XLEN-1:0] MIE_MIP_MASK = {{(XLEN-12){1'b0}}, 1'b1, 3'b000, 1'b1, 3'b000, 1'b1, 3'b000};
     localparam [XLEN-1:0] MHARTID_VALUE = HART_ID;
 
@@ -223,10 +225,15 @@ module csr_unit #(
                 mepc_r <= mask_mepc(trap_mepc_i);
                 mcause_r <= trap_mcause_i;
                 mtval_r <= trap_mtval_i;
+                mstatus_r <= (mstatus_r & ~(MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP)) |
+                             (mstatus_r[MSTATUS_MIE_BIT] ? MSTATUS_MPIE : ZERO) |
+                             MSTATUS_MPP;
             end
 
             if (mret_commit_valid_i === 1'b1) begin
-                mstatus_r <= mstatus_r;
+                mstatus_r <= (mstatus_r & ~(MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP)) |
+                             (mstatus_r[MSTATUS_MPIE_BIT] ? MSTATUS_MIE : ZERO) |
+                             MSTATUS_MPIE;
             end
 
             if ((csr_commit_valid_i === 1'b1) &&
