@@ -799,18 +799,35 @@ module cpu_core #(
     wire id_ex_ebreak = id_ex_valid && (id_ex_sys_event == `SYS_EVT_EBREAK);
     wire id_ex_mret = id_ex_valid && (id_ex_sys_event == `SYS_EVT_MRET);
     wire id_ex_illegal_csr = id_ex_valid && id_ex_csr_instr && csr_read_illegal;
+    wire [31:0] ex_effective_addr = alu_y;
+    wire ex_load_misaligned =
+        id_ex_valid &&
+        id_ex_mem_read &&
+        (((id_ex_funct3 == 3'b001) && ex_effective_addr[0]) ||
+         ((id_ex_funct3 == 3'b010) && |ex_effective_addr[1:0]));
+    wire ex_store_misaligned =
+        id_ex_valid &&
+        id_ex_mem_write &&
+        (((id_ex_funct3 == 3'b001) && ex_effective_addr[0]) ||
+         ((id_ex_funct3 == 3'b010) && |ex_effective_addr[1:0]));
     wire ex_trap_valid = id_ex_valid &&
                          (id_ex_illegal_instr ||
                           id_ex_illegal_csr ||
                           id_ex_ecall ||
-                          id_ex_ebreak);
+                          id_ex_ebreak ||
+                          ex_load_misaligned ||
+                          ex_store_misaligned);
     wire ex_mret_valid = id_ex_mret && !ex_trap_valid;
+    wire id_ex_faulting = ex_trap_valid || ex_mret_valid;
     assign ex_trap_cause =
         (id_ex_illegal_instr || id_ex_illegal_csr) ? `CAUSE_ILLEGAL_INSTRUCTION :
         id_ex_ebreak ? `CAUSE_BREAKPOINT :
-        `CAUSE_ECALL_MMODE;
+        id_ex_ecall ? `CAUSE_ECALL_MMODE :
+        ex_load_misaligned ? `CAUSE_LOAD_ADDR_MISALIGNED :
+        `CAUSE_STORE_ADDR_MISALIGNED;
     assign ex_trap_tval =
         (id_ex_illegal_instr || id_ex_illegal_csr) ? id_ex_instr :
+        (ex_load_misaligned || ex_store_misaligned) ? ex_effective_addr :
         32'h00000000;
     assign trap_redirect_detect = !redirect_valid && !pipe_wait && ex_trap_valid;
     assign mret_redirect_detect = !redirect_valid && !pipe_wait && ex_mret_valid;
@@ -1352,26 +1369,27 @@ module cpu_core #(
                 ex_mem_csr_wdata <= 32'h00000000;
                 ex_mem_csr_rd_zero <= 1'b0;
             end else begin
-                ex_mem_valid <= id_ex_valid && !csr_redirect_detect;
+                ex_mem_valid <= id_ex_valid && !id_ex_faulting && !csr_redirect_detect;
                 ex_mem_alu_result <= ex_result;
                 ex_mem_rs2_data <= forward_b_data;
                 ex_mem_pc4 <= id_ex_pc + 32'd4;
                 ex_mem_rd <= id_ex_rd;
                 ex_mem_funct3 <= id_ex_funct3;
                 ex_mem_reg_write <= id_ex_reg_write &&
-                                    !(id_ex_csr_instr && csr_read_illegal) &&
+                                    !id_ex_faulting &&
                                     !csr_redirect_detect;
-                ex_mem_mem_read <= id_ex_mem_read && !csr_redirect_detect;
-                ex_mem_mem_write <= id_ex_mem_write && !csr_redirect_detect;
+                ex_mem_mem_read <= id_ex_mem_read && !id_ex_faulting && !csr_redirect_detect;
+                ex_mem_mem_write <= id_ex_mem_write && !id_ex_faulting && !csr_redirect_detect;
                 ex_mem_wb_sel <= id_ex_wb_sel;
                 ex_mem_load_early_valid <= id_ex_valid &&
                                            id_ex_mem_read &&
                                            id_ex_load_early_valid &&
+                                           !id_ex_faulting &&
                                            !csr_redirect_detect;
                 ex_mem_load_early_data <= id_ex_early_load_data;
                 ex_mem_csr_instr <= id_ex_valid &&
                                     id_ex_csr_instr &&
-                                    !csr_read_illegal &&
+                                    !id_ex_faulting &&
                                     !csr_redirect_detect;
                 ex_mem_csr_op <= id_ex_csr_op;
                 ex_mem_csr_addr <= id_ex_csr_addr;
