@@ -51,6 +51,7 @@ module cpu_core #(
 
     reg id_ex_valid;
     reg [31:0] id_ex_pc;
+    reg [31:0] id_ex_instr;
     reg [31:0] id_ex_imm;
     reg [31:0] id_ex_rs1_data;
     reg [31:0] id_ex_rs2_data;
@@ -71,6 +72,8 @@ module cpu_core #(
     reg id_ex_csr_instr;
     reg [2:0] id_ex_csr_op;
     reg [11:0] id_ex_csr_addr;
+    reg [2:0] id_ex_sys_event;
+    reg id_ex_illegal_instr;
     reg id_ex_m_ext;
     reg id_ex_pred_taken;
     reg [31:0] id_ex_pred_target;
@@ -129,6 +132,7 @@ module cpu_core #(
     reg redirect_taken_q;
     reg redirect_branch_mispredict;
     reg redirect_jump_flush;
+    reg redirect_csr_flush;
     reg redirect_from_replay;
     reg ctrl_replay_valid;
     reg ctrl_replay_branch;
@@ -294,6 +298,10 @@ module cpu_core #(
     wire [31:0] csr_mret_pc;
     wire [31:0] csr_mcycle;
     wire [31:0] csr_minstret;
+    wire trap_redirect_detect;
+    wire mret_redirect_detect;
+    wire [31:0] ex_trap_cause;
+    wire [31:0] ex_trap_tval;
 
     csr_unit #(
         .XLEN(32),
@@ -315,11 +323,11 @@ module cpu_core #(
         .csr_commit_addr_i(ex_mem_csr_addr),
         .csr_commit_wdata_i(ex_mem_csr_wdata),
         .csr_commit_rd_zero_i(ex_mem_csr_rd_zero),
-        .trap_commit_valid_i(1'b0),
-        .trap_mepc_i(32'h00000000),
-        .trap_mcause_i(32'h00000000),
-        .trap_mtval_i(32'h00000000),
-        .mret_commit_valid_i(1'b0),
+        .trap_commit_valid_i(trap_redirect_detect),
+        .trap_mepc_i(id_ex_pc),
+        .trap_mcause_i(ex_trap_cause),
+        .trap_mtval_i(ex_trap_tval),
+        .mret_commit_valid_i(mret_redirect_detect),
         .trap_pc_o(csr_trap_pc),
         .mret_pc_o(csr_mret_pc),
         .mcycle_o(csr_mcycle),
@@ -351,8 +359,11 @@ module cpu_core #(
     wire [1:0] forward_b_sel;
     wire if_id_is_mul = if_id_valid && dec_m_ext && !dec_funct3[2];
     wire id_ex_is_mul = id_ex_valid && id_ex_m_ext && !id_ex_funct3[2];
+    wire if_id_csr_state_reader = dec_csr_instr ||
+                                  (dec_sys_event != `SYS_EVT_NONE) ||
+                                  dec_illegal_instr;
     wire csr_hazard_stall = if_id_valid &&
-                             dec_csr_instr &&
+                             if_id_csr_state_reader &&
                              id_ex_valid &&
                              id_ex_csr_instr;
     assign hazard_stall = raw_hazard_stall || csr_hazard_stall;
@@ -780,9 +791,31 @@ module cpu_core #(
     wire [31:0] jalr_target = (ctrl_rs1_data + ctrl_imm) & 32'hffff_fffe;
     wire [31:0] redirect_target_pc = ctrl_jalr ? jalr_target : branch_target;
     wire [31:0] redirect_fallthrough_pc = ctrl_pc + 32'd4;
-    wire [31:0] redirect_pc = redirect_jump_flush ? redirect_pc_q :
+    wire [31:0] redirect_pc = redirect_csr_flush ? redirect_pc_q :
+                                redirect_jump_flush ? redirect_pc_q :
                                 redirect_taken_q ? redirect_pc_q :
                                 redirect_fallthrough_pc_q;
+    wire id_ex_ecall = id_ex_valid && (id_ex_sys_event == `SYS_EVT_ECALL);
+    wire id_ex_ebreak = id_ex_valid && (id_ex_sys_event == `SYS_EVT_EBREAK);
+    wire id_ex_mret = id_ex_valid && (id_ex_sys_event == `SYS_EVT_MRET);
+    wire id_ex_illegal_csr = id_ex_valid && id_ex_csr_instr && csr_read_illegal;
+    wire ex_trap_valid = id_ex_valid &&
+                         (id_ex_illegal_instr ||
+                          id_ex_illegal_csr ||
+                          id_ex_ecall ||
+                          id_ex_ebreak);
+    wire ex_mret_valid = id_ex_mret && !ex_trap_valid;
+    assign ex_trap_cause =
+        (id_ex_illegal_instr || id_ex_illegal_csr) ? `CAUSE_ILLEGAL_INSTRUCTION :
+        id_ex_ebreak ? `CAUSE_BREAKPOINT :
+        `CAUSE_ECALL_MMODE;
+    assign ex_trap_tval =
+        (id_ex_illegal_instr || id_ex_illegal_csr) ? id_ex_instr :
+        32'h00000000;
+    assign trap_redirect_detect = !redirect_valid && !pipe_wait && ex_trap_valid;
+    assign mret_redirect_detect = !redirect_valid && !pipe_wait && ex_mret_valid;
+    wire csr_redirect_detect = trap_redirect_detect || mret_redirect_detect;
+    wire [31:0] csr_redirect_pc = trap_redirect_detect ? csr_trap_pc : csr_mret_pc;
     wire ctrl_branch_target_mismatch = branch_target != ctrl_pred_target;
     wire branch_mispredict_raw = ctrl_valid && ctrl_branch &&
                                  (branch_taken ? (!ctrl_pred_taken || ctrl_branch_target_mismatch) :
@@ -791,13 +824,24 @@ module cpu_core #(
     wire jalr_target_mismatch_flush_raw = take_jump && ctrl_jalr && ctrl_jump_early_redirect &&
                                           (jalr_target != ctrl_pred_target);
     wire jump_needs_flush_raw = jump_unpredicted_flush_raw || jalr_target_mismatch_flush_raw;
-    wire branch_mispredict_detect = !redirect_valid && !pipe_wait && branch_mispredict_raw;
-    wire jump_needs_flush_detect = !redirect_valid && !pipe_wait && jump_needs_flush_raw;
-    wire redirect_detect = branch_mispredict_detect || jump_needs_flush_detect;
-    wire redirect_candidate_valid = !redirect_valid && !pipe_wait && ctrl_valid && (ctrl_branch || ctrl_jump);
+    wire branch_mispredict_detect = !csr_redirect_detect &&
+                                    !redirect_valid &&
+                                    !pipe_wait &&
+                                    branch_mispredict_raw;
+    wire jump_needs_flush_detect = !csr_redirect_detect &&
+                                   !redirect_valid &&
+                                   !pipe_wait &&
+                                   jump_needs_flush_raw;
+    wire redirect_detect = csr_redirect_detect || branch_mispredict_detect || jump_needs_flush_detect;
+    wire redirect_candidate_valid = !csr_redirect_detect &&
+                                    !redirect_valid &&
+                                    !pipe_wait &&
+                                    ctrl_valid &&
+                                    (ctrl_branch || ctrl_jump);
     wire branch_mispredict = redirect_valid && redirect_branch_mispredict;
     wire jump_needs_flush = redirect_valid && redirect_jump_flush;
-    wire flush = branch_mispredict || jump_needs_flush;
+    wire trap_or_mret_flush = redirect_valid && redirect_csr_flush;
+    wire flush = trap_or_mret_flush || branch_mispredict || jump_needs_flush;
     assign replay_flush = flush && redirect_from_replay;
     wire id_load_early_base_wait = if_id_valid &&
                                    if_id_mem_read_q &&
@@ -808,6 +852,8 @@ module cpu_core #(
                                        if_id_valid &&
                                        (dec_mem_write ||
                                         dec_csr_instr ||
+                                        (dec_sys_event != `SYS_EVT_NONE) ||
+                                        dec_illegal_instr ||
                                         dec_m_ext ||
                                         dec_branch ||
                                         dec_jump);
@@ -831,6 +877,7 @@ module cpu_core #(
                       ((dec_rs1 == 5'd1) || (dec_rs1 == 5'd5)) &&
                       (dec_imm == 32'h00000000);
     wire id_jal_redirect = if_id_valid && dec_jump && !dec_jalr &&
+                           !csr_redirect_detect &&
                            !pipe_wait &&
                            !hazard_stall &&
                            !control_conflict_stall &&
@@ -840,6 +887,7 @@ module cpu_core #(
                            !id_jal_predicted_hit &&
                            !flush;
     wire id_jalr_ras_redirect = if_id_valid && dec_return && ras_valid &&
+                                !csr_redirect_detect &&
                                 !pipe_wait &&
                                 !hazard_stall &&
                                 !control_conflict_stall &&
@@ -852,6 +900,7 @@ module cpu_core #(
     wire frontend_flush = flush || id_jal_redirect || id_jalr_ras_redirect;
     wire id_stage_accept = if_id_valid &&
                            !flush &&
+                           !csr_redirect_detect &&
                            !pipe_wait &&
                            !load_control_early_capture &&
                            !hazard_stall &&
@@ -865,6 +914,8 @@ module cpu_core #(
     wire id_load_early_read = (ENABLE_ID_LOAD_EARLY_READ != 0) &&
                               if_id_valid &&
                               if_id_mem_read_q &&
+                              !flush &&
+                              !csr_redirect_detect &&
                               !if_id_load_base_inflight_dep &&
                               !if_id_load_base_load_resp_dep &&
                               !if_id_load_base_mem_wb_dep &&
@@ -877,7 +928,7 @@ module cpu_core #(
                                           if_id_rs1_raw_data_q;
     wire [31:0] id_load_early_addr = id_load_early_base_data + if_id_load_imm_q;
 
-    wire bp_branch_update = ctrl_valid && ctrl_branch && !pipe_wait;
+    wire bp_branch_update = ctrl_valid && ctrl_branch && !pipe_wait && !csr_redirect_detect;
     wire bp_jal_update = id_jal_redirect && !bp_branch_update;
     wire bp_update = bp_branch_update || bp_jal_update;
     wire [31:0] bp_update_pc = bp_branch_update ? ctrl_pc : if_id_pc;
@@ -978,6 +1029,7 @@ module cpu_core #(
             if_id_load_imm_q <= 32'h00000000;
             id_ex_valid <= 1'b0;
             id_ex_pc <= 32'h00000000;
+            id_ex_instr <= 32'h00000013;
             id_ex_imm <= 32'h00000000;
             id_ex_rs1_data <= 32'h00000000;
             id_ex_rs2_data <= 32'h00000000;
@@ -998,6 +1050,8 @@ module cpu_core #(
             id_ex_csr_instr <= 1'b0;
             id_ex_csr_op <= `CSR_OP_NONE;
             id_ex_csr_addr <= 12'h000;
+            id_ex_sys_event <= `SYS_EVT_NONE;
+            id_ex_illegal_instr <= 1'b0;
             id_ex_m_ext <= 1'b0;
             id_ex_pred_taken <= 1'b0;
             id_ex_pred_target <= 32'h00000004;
@@ -1058,6 +1112,7 @@ module cpu_core #(
             redirect_taken_q <= 1'b0;
             redirect_branch_mispredict <= 1'b0;
             redirect_jump_flush <= 1'b0;
+            redirect_csr_flush <= 1'b0;
             redirect_from_replay <= 1'b0;
             ctrl_replay_valid <= 1'b0;
             ctrl_replay_branch <= 1'b0;
@@ -1202,7 +1257,11 @@ module cpu_core #(
                 end
             end
 
-            if (redirect_candidate_valid) begin
+            if (csr_redirect_detect) begin
+                redirect_pc_q <= csr_redirect_pc;
+                redirect_fallthrough_pc_q <= csr_redirect_pc;
+                redirect_taken_q <= 1'b1;
+            end else if (redirect_candidate_valid) begin
                 redirect_pc_q <= redirect_target_pc;
                 redirect_fallthrough_pc_q <= redirect_fallthrough_pc;
                 redirect_taken_q <= take_branch;
@@ -1210,7 +1269,8 @@ module cpu_core #(
             redirect_valid <= redirect_detect;
             redirect_branch_mispredict <= redirect_detect && branch_mispredict_detect;
             redirect_jump_flush <= redirect_detect && jump_needs_flush_detect;
-            redirect_from_replay <= ctrl_replay_valid && !pipe_wait;
+            redirect_csr_flush <= redirect_detect && csr_redirect_detect;
+            redirect_from_replay <= !csr_redirect_detect && ctrl_replay_valid && !pipe_wait;
 
             load_resp_valid <= !replay_flush && ex_mem_valid && ex_mem_mem_read;
             load_resp_rd <= ex_mem_rd;
@@ -1292,19 +1352,27 @@ module cpu_core #(
                 ex_mem_csr_wdata <= 32'h00000000;
                 ex_mem_csr_rd_zero <= 1'b0;
             end else begin
-                ex_mem_valid <= id_ex_valid;
+                ex_mem_valid <= id_ex_valid && !csr_redirect_detect;
                 ex_mem_alu_result <= ex_result;
                 ex_mem_rs2_data <= forward_b_data;
                 ex_mem_pc4 <= id_ex_pc + 32'd4;
                 ex_mem_rd <= id_ex_rd;
                 ex_mem_funct3 <= id_ex_funct3;
-                ex_mem_reg_write <= id_ex_reg_write && !(id_ex_csr_instr && csr_read_illegal);
-                ex_mem_mem_read <= id_ex_mem_read;
-                ex_mem_mem_write <= id_ex_mem_write;
+                ex_mem_reg_write <= id_ex_reg_write &&
+                                    !(id_ex_csr_instr && csr_read_illegal) &&
+                                    !csr_redirect_detect;
+                ex_mem_mem_read <= id_ex_mem_read && !csr_redirect_detect;
+                ex_mem_mem_write <= id_ex_mem_write && !csr_redirect_detect;
                 ex_mem_wb_sel <= id_ex_wb_sel;
-                ex_mem_load_early_valid <= id_ex_valid && id_ex_mem_read && id_ex_load_early_valid;
+                ex_mem_load_early_valid <= id_ex_valid &&
+                                           id_ex_mem_read &&
+                                           id_ex_load_early_valid &&
+                                           !csr_redirect_detect;
                 ex_mem_load_early_data <= id_ex_early_load_data;
-                ex_mem_csr_instr <= id_ex_valid && id_ex_csr_instr && !csr_read_illegal;
+                ex_mem_csr_instr <= id_ex_valid &&
+                                    id_ex_csr_instr &&
+                                    !csr_read_illegal &&
+                                    !csr_redirect_detect;
                 ex_mem_csr_op <= id_ex_csr_op;
                 ex_mem_csr_addr <= id_ex_csr_addr;
                 ex_mem_csr_wdata <= csr_read_wdata;
@@ -1313,6 +1381,7 @@ module cpu_core #(
 
             if (flush) begin
                 id_ex_valid <= 1'b0;
+                id_ex_instr <= 32'h00000013;
                 id_ex_reg_write <= 1'b0;
                 id_ex_mem_read <= 1'b0;
                 id_ex_mem_write <= 1'b0;
@@ -1322,6 +1391,8 @@ module cpu_core #(
                 id_ex_csr_instr <= 1'b0;
                 id_ex_csr_op <= `CSR_OP_NONE;
                 id_ex_csr_addr <= 12'h000;
+                id_ex_sys_event <= `SYS_EVT_NONE;
+                id_ex_illegal_instr <= 1'b0;
                 id_ex_m_ext <= 1'b0;
                 id_ex_pred_taken <= 1'b0;
                 id_ex_pred_target <= 32'h00000004;
@@ -1336,6 +1407,7 @@ module cpu_core #(
                          id_load_early_base_wait ||
                          ctrl_pending_conflict_stall) begin
                 id_ex_valid <= 1'b0;
+                id_ex_instr <= 32'h00000013;
                 id_ex_reg_write <= 1'b0;
                 id_ex_mem_read <= 1'b0;
                 id_ex_mem_write <= 1'b0;
@@ -1345,6 +1417,8 @@ module cpu_core #(
                 id_ex_csr_instr <= 1'b0;
                 id_ex_csr_op <= `CSR_OP_NONE;
                 id_ex_csr_addr <= 12'h000;
+                id_ex_sys_event <= `SYS_EVT_NONE;
+                id_ex_illegal_instr <= 1'b0;
                 id_ex_m_ext <= 1'b0;
                 id_ex_pred_taken <= 1'b0;
                 id_ex_pred_target <= 32'h00000004;
@@ -1352,6 +1426,7 @@ module cpu_core #(
             end else begin
                 id_ex_valid <= if_id_valid;
                 id_ex_pc <= if_id_pc;
+                id_ex_instr <= if_id_instr;
                 id_ex_imm <= dec_imm;
                 id_ex_rs1_data <= rf_rs1_data;
                 id_ex_rs2_data <= rf_rs2_data;
@@ -1372,6 +1447,8 @@ module cpu_core #(
                 id_ex_csr_instr <= dec_csr_instr && if_id_valid;
                 id_ex_csr_op <= dec_csr_op;
                 id_ex_csr_addr <= if_id_instr[31:20];
+                id_ex_sys_event <= dec_sys_event;
+                id_ex_illegal_instr <= dec_illegal_instr && if_id_valid;
                 id_ex_m_ext <= dec_m_ext && if_id_valid;
                 id_ex_pred_taken <= if_id_pred_taken && if_id_valid;
                 id_ex_pred_target <= id_jalr_ras_redirect ? ras_top_target : if_id_pred_target;
