@@ -233,7 +233,8 @@ module csr_unit #(
             if (mret_commit_valid_i === 1'b1) begin
                 mstatus_r <= (mstatus_r & ~(MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP)) |
                              (mstatus_r[MSTATUS_MPIE_BIT] ? MSTATUS_MIE : ZERO) |
-                             MSTATUS_MPIE;
+                             MSTATUS_MPIE |
+                             MSTATUS_MPP;
             end
 
             if ((csr_commit_valid_i === 1'b1) &&

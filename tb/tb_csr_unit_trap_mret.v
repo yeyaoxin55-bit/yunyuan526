@@ -166,7 +166,7 @@ module tb_csr_unit_trap_mret;
         #1;
         clear_req();
 
-        csr_read_expect(`CSR_MSTATUS, 32'h00000088);
+        csr_read_expect(`CSR_MSTATUS, 32'h00001888);
 
         $display("PASS csr_unit trap/mret regression completed");
         $finish;
