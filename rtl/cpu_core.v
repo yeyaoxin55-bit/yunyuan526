@@ -69,6 +69,7 @@ module cpu_core #(
     reg id_ex_jalr;
     reg id_ex_jump_early_redirect;
     reg id_ex_csr_instr;
+    reg [2:0] id_ex_csr_op;
     reg [11:0] id_ex_csr_addr;
     reg id_ex_m_ext;
     reg id_ex_pred_taken;
@@ -87,6 +88,11 @@ module cpu_core #(
     reg [1:0] ex_mem_wb_sel;
     reg ex_mem_load_early_valid;
     reg [31:0] ex_mem_load_early_data;
+    reg ex_mem_csr_instr;
+    reg [2:0] ex_mem_csr_op;
+    reg [11:0] ex_mem_csr_addr;
+    reg [31:0] ex_mem_csr_wdata;
+    reg ex_mem_csr_rd_zero;
 
     reg mem_wb_valid;
     reg [31:0] mem_wb_alu_result;
@@ -281,9 +287,13 @@ module cpu_core #(
         .m_ext(dec_m_ext)
     );
 
+    wire [31:0] csr_read_wdata;
+    wire [31:0] csr_rdata;
+    wire csr_read_illegal;
+    wire [31:0] csr_trap_pc;
+    wire [31:0] csr_mret_pc;
     wire [31:0] csr_mcycle;
     wire [31:0] csr_minstret;
-    reg [31:0] csr_rdata;
 
     csr_unit #(
         .XLEN(32),
@@ -293,17 +303,28 @@ module cpu_core #(
         .rst(rst),
         .retire_i(retire_valid),
         .retire_count_i(retire_count),
+        .csr_read_valid_i(id_ex_valid && id_ex_csr_instr),
+        .csr_read_op_i(id_ex_csr_op),
+        .csr_read_addr_i(id_ex_csr_addr),
+        .csr_read_wdata_i(csr_read_wdata),
+        .csr_read_rd_zero_i(id_ex_rd == 5'd0),
+        .csr_read_data_o(csr_rdata),
+        .csr_read_illegal_o(csr_read_illegal),
+        .csr_commit_valid_i(ex_mem_valid && ex_mem_csr_instr && !replay_flush),
+        .csr_commit_op_i(ex_mem_csr_op),
+        .csr_commit_addr_i(ex_mem_csr_addr),
+        .csr_commit_wdata_i(ex_mem_csr_wdata),
+        .csr_commit_rd_zero_i(ex_mem_csr_rd_zero),
+        .trap_commit_valid_i(1'b0),
+        .trap_mepc_i(32'h00000000),
+        .trap_mcause_i(32'h00000000),
+        .trap_mtval_i(32'h00000000),
+        .mret_commit_valid_i(1'b0),
+        .trap_pc_o(csr_trap_pc),
+        .mret_pc_o(csr_mret_pc),
         .mcycle_o(csr_mcycle),
         .minstret_o(csr_minstret)
     );
-
-    always @(*) begin
-        case (id_ex_csr_addr)
-            12'hB00: csr_rdata = csr_mcycle;
-            12'hB02: csr_rdata = csr_minstret;
-            default: csr_rdata = 32'h00000000;
-        endcase
-    end
 
     regfile #(.XLEN(32)) u_regfile (
         .clk(clk),
@@ -324,11 +345,17 @@ module cpu_core #(
         .rdata3(rf_prefetch_rs1_data)
     );
 
+    wire raw_hazard_stall;
     wire hazard_stall;
     wire [1:0] forward_a_sel;
     wire [1:0] forward_b_sel;
     wire if_id_is_mul = if_id_valid && dec_m_ext && !dec_funct3[2];
     wire id_ex_is_mul = id_ex_valid && id_ex_m_ext && !id_ex_funct3[2];
+    wire csr_hazard_stall = if_id_valid &&
+                             dec_csr_instr &&
+                             id_ex_valid &&
+                             id_ex_csr_instr;
+    assign hazard_stall = raw_hazard_stall || csr_hazard_stall;
     wire dec_uses_rs1 = (dec_opcode == `OPCODE_JALR) ||
                         (dec_opcode == `OPCODE_BRANCH) ||
                         (dec_opcode == `OPCODE_LOAD) ||
@@ -533,7 +560,7 @@ module cpu_core #(
         .load_resp_rd(load_resp_rd),
         .id_ex_rs1(id_ex_rs1),
         .id_ex_rs2(id_ex_rs2),
-        .stall(hazard_stall),
+        .stall(raw_hazard_stall),
         .forward_a(forward_a_sel),
         .forward_b(forward_b_sel)
     );
@@ -596,6 +623,8 @@ module cpu_core #(
                                  mul_early_forward_b ? mul_early_result :
                                  mul_complete_forward_b ? mul_result :
                                  id_ex_rs2_data;
+    assign csr_read_wdata = id_ex_csr_op[2] ? {27'h0000000, id_ex_rs1} :
+                                               forward_a_data;
     wire [31:0] m_ext_forward_a_data = (forward_a_sel == 2'd1) ? ex_mem_forward_data :
                                        (forward_a_sel == 2'd2) ? wb_data :
                                        ((forward_a_sel == 2'd3) && m_ext_load_resp_forward_en) ? load_resp_forward_data :
@@ -967,6 +996,7 @@ module cpu_core #(
             id_ex_jalr <= 1'b0;
             id_ex_jump_early_redirect <= 1'b0;
             id_ex_csr_instr <= 1'b0;
+            id_ex_csr_op <= `CSR_OP_NONE;
             id_ex_csr_addr <= 12'h000;
             id_ex_m_ext <= 1'b0;
             id_ex_pred_taken <= 1'b0;
@@ -984,6 +1014,11 @@ module cpu_core #(
             ex_mem_wb_sel <= 2'd0;
             ex_mem_load_early_valid <= 1'b0;
             ex_mem_load_early_data <= 32'h00000000;
+            ex_mem_csr_instr <= 1'b0;
+            ex_mem_csr_op <= `CSR_OP_NONE;
+            ex_mem_csr_addr <= 12'h000;
+            ex_mem_csr_wdata <= 32'h00000000;
+            ex_mem_csr_rd_zero <= 1'b0;
             mem_wb_valid <= 1'b0;
             mem_wb_alu_result <= 32'h00000000;
             mem_wb_mem_data <= 32'h00000000;
@@ -1205,6 +1240,11 @@ module cpu_core #(
                 ex_mem_wb_sel <= 2'd0;
                 ex_mem_load_early_valid <= 1'b0;
                 ex_mem_load_early_data <= 32'h00000000;
+                ex_mem_csr_instr <= 1'b0;
+                ex_mem_csr_op <= `CSR_OP_NONE;
+                ex_mem_csr_addr <= 12'h000;
+                ex_mem_csr_wdata <= 32'h00000000;
+                ex_mem_csr_rd_zero <= 1'b0;
             end else if (exec_wait || control_conflict_stall) begin
                 ex_mem_valid <= 1'b0;
                 ex_mem_rd <= 5'd0;
@@ -1215,6 +1255,11 @@ module cpu_core #(
                 ex_mem_wb_sel <= 2'd0;
                 ex_mem_load_early_valid <= 1'b0;
                 ex_mem_load_early_data <= 32'h00000000;
+                ex_mem_csr_instr <= 1'b0;
+                ex_mem_csr_op <= `CSR_OP_NONE;
+                ex_mem_csr_addr <= 12'h000;
+                ex_mem_csr_wdata <= 32'h00000000;
+                ex_mem_csr_rd_zero <= 1'b0;
             end else if (mul_start) begin
                 ex_mem_valid <= 1'b0;
                 ex_mem_rd <= 5'd0;
@@ -1225,6 +1270,11 @@ module cpu_core #(
                 ex_mem_wb_sel <= 2'd0;
                 ex_mem_load_early_valid <= 1'b0;
                 ex_mem_load_early_data <= 32'h00000000;
+                ex_mem_csr_instr <= 1'b0;
+                ex_mem_csr_op <= `CSR_OP_NONE;
+                ex_mem_csr_addr <= 12'h000;
+                ex_mem_csr_wdata <= 32'h00000000;
+                ex_mem_csr_rd_zero <= 1'b0;
             end else if (control_replay_capture) begin
                 ex_mem_valid <= id_ex_valid;
                 ex_mem_pc4 <= id_ex_pc + 32'd4;
@@ -1236,6 +1286,11 @@ module cpu_core #(
                 ex_mem_wb_sel <= id_ex_wb_sel;
                 ex_mem_load_early_valid <= 1'b0;
                 ex_mem_load_early_data <= 32'h00000000;
+                ex_mem_csr_instr <= 1'b0;
+                ex_mem_csr_op <= `CSR_OP_NONE;
+                ex_mem_csr_addr <= 12'h000;
+                ex_mem_csr_wdata <= 32'h00000000;
+                ex_mem_csr_rd_zero <= 1'b0;
             end else begin
                 ex_mem_valid <= id_ex_valid;
                 ex_mem_alu_result <= ex_result;
@@ -1243,12 +1298,17 @@ module cpu_core #(
                 ex_mem_pc4 <= id_ex_pc + 32'd4;
                 ex_mem_rd <= id_ex_rd;
                 ex_mem_funct3 <= id_ex_funct3;
-                ex_mem_reg_write <= id_ex_reg_write;
+                ex_mem_reg_write <= id_ex_reg_write && !(id_ex_csr_instr && csr_read_illegal);
                 ex_mem_mem_read <= id_ex_mem_read;
                 ex_mem_mem_write <= id_ex_mem_write;
                 ex_mem_wb_sel <= id_ex_wb_sel;
                 ex_mem_load_early_valid <= id_ex_valid && id_ex_mem_read && id_ex_load_early_valid;
                 ex_mem_load_early_data <= id_ex_early_load_data;
+                ex_mem_csr_instr <= id_ex_valid && id_ex_csr_instr && !csr_read_illegal;
+                ex_mem_csr_op <= id_ex_csr_op;
+                ex_mem_csr_addr <= id_ex_csr_addr;
+                ex_mem_csr_wdata <= csr_read_wdata;
+                ex_mem_csr_rd_zero <= (id_ex_rd == 5'd0);
             end
 
             if (flush) begin
@@ -1260,6 +1320,8 @@ module cpu_core #(
                 id_ex_jump <= 1'b0;
                 id_ex_jump_early_redirect <= 1'b0;
                 id_ex_csr_instr <= 1'b0;
+                id_ex_csr_op <= `CSR_OP_NONE;
+                id_ex_csr_addr <= 12'h000;
                 id_ex_m_ext <= 1'b0;
                 id_ex_pred_taken <= 1'b0;
                 id_ex_pred_target <= 32'h00000004;
@@ -1281,6 +1343,8 @@ module cpu_core #(
                 id_ex_jump <= 1'b0;
                 id_ex_jump_early_redirect <= 1'b0;
                 id_ex_csr_instr <= 1'b0;
+                id_ex_csr_op <= `CSR_OP_NONE;
+                id_ex_csr_addr <= 12'h000;
                 id_ex_m_ext <= 1'b0;
                 id_ex_pred_taken <= 1'b0;
                 id_ex_pred_target <= 32'h00000004;
@@ -1306,6 +1370,7 @@ module cpu_core #(
                 id_ex_jalr <= dec_jalr;
                 id_ex_jump_early_redirect <= id_jump_resolved_in_id;
                 id_ex_csr_instr <= dec_csr_instr && if_id_valid;
+                id_ex_csr_op <= dec_csr_op;
                 id_ex_csr_addr <= if_id_instr[31:20];
                 id_ex_m_ext <= dec_m_ext && if_id_valid;
                 id_ex_pred_taken <= if_id_pred_taken && if_id_valid;
