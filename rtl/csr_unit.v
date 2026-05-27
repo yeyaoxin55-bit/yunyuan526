@@ -36,8 +36,8 @@ module csr_unit #(
 
     output wire [XLEN-1:0] trap_pc_o,
     output wire [XLEN-1:0] mret_pc_o,
-    output reg [XLEN-1:0] mcycle_o,
-    output reg [XLEN-1:0] minstret_o
+    output wire [XLEN-1:0] mcycle_o,
+    output wire [XLEN-1:0] minstret_o
 );
     localparam [XLEN-1:0] ZERO = {XLEN{1'b0}};
     localparam [XLEN-1:0] MSTATUS_MIE  = {{(XLEN-4){1'b0}}, 1'b1, 3'b000};
@@ -57,6 +57,8 @@ module csr_unit #(
     reg [XLEN-1:0] mcause_r;
     reg [XLEN-1:0] mtval_r;
     reg [XLEN-1:0] mip_r;
+    reg [63:0] mcycle_r;
+    reg [63:0] minstret_r;
 
     wire [1:0] misa_mxl = (XLEN == 64) ? 2'b10 : 2'b01;
     wire [XLEN-1:0] misa_value =
@@ -67,6 +69,8 @@ module csr_unit #(
 
     assign trap_pc_o = {mtvec_r[XLEN-1:2], 2'b00};
     assign mret_pc_o = mask_mepc(mepc_r);
+    assign mcycle_o = mcycle_r[XLEN-1:0];
+    assign minstret_o = minstret_r[XLEN-1:0];
 
     function [XLEN-1:0] mask_mepc;
         input [XLEN-1:0] value;
@@ -174,10 +178,10 @@ module csr_unit #(
                 `CSR_MCAUSE: csr_value = mcause_r;
                 `CSR_MTVAL: csr_value = mtval_r;
                 `CSR_MIP: csr_value = mip_r;
-                `CSR_MCYCLE: csr_value = mcycle_o;
-                `CSR_MINSTRET: csr_value = minstret_o;
-                `CSR_MCYCLEH: csr_value = ZERO;
-                `CSR_MINSTRETH: csr_value = ZERO;
+                `CSR_MCYCLE: csr_value = mcycle_r[XLEN-1:0];
+                `CSR_MINSTRET: csr_value = minstret_r[XLEN-1:0];
+                `CSR_MCYCLEH: csr_value = (XLEN == 32) ? mcycle_r[63:32] : ZERO;
+                `CSR_MINSTRETH: csr_value = (XLEN == 32) ? minstret_r[63:32] : ZERO;
                 `CSR_MVENDORID: csr_value = ZERO;
                 `CSR_MARCHID: csr_value = ZERO;
                 `CSR_MIMPID: csr_value = ZERO;
@@ -204,6 +208,9 @@ module csr_unit #(
         end
     endfunction
 
+    wire [XLEN-1:0] csr_commit_next_value =
+        csr_apply_op(csr_commit_op_i, csr_value(csr_commit_addr_i), csr_commit_wdata_i);
+
     always @(*) begin
         csr_read_data_o = csr_value(csr_read_addr_i);
         csr_read_illegal_o = 1'b0;
@@ -219,8 +226,8 @@ module csr_unit #(
 
     always @(posedge clk) begin
         if (rst) begin
-            mcycle_o <= {XLEN{1'b0}};
-            minstret_o <= {XLEN{1'b0}};
+            mcycle_r <= 64'h0000000000000000;
+            minstret_r <= 64'h0000000000000000;
             mstatus_r <= {XLEN{1'b0}};
             mie_r <= {XLEN{1'b0}};
             mtvec_r <= {XLEN{1'b0}};
@@ -230,9 +237,9 @@ module csr_unit #(
             mtval_r <= {XLEN{1'b0}};
             mip_r <= {XLEN{1'b0}};
         end else begin
-            mcycle_o <= mcycle_o + {{(XLEN-1){1'b0}}, 1'b1};
+            mcycle_r <= mcycle_r + 64'h0000000000000001;
             if (retire_i === 1'b1) begin
-                minstret_o <= minstret_o + {{(XLEN-2){1'b0}}, retire_count_i};
+                minstret_r <= minstret_r + {62'h0000000000000000, retire_count_i};
             end
 
             if (trap_commit_valid_i === 1'b1) begin
@@ -256,16 +263,38 @@ module csr_unit #(
                 !csr_is_read_only(csr_commit_addr_i) &&
                 csr_write_requested(csr_commit_op_i, csr_commit_wdata_i)) begin
                 case (csr_commit_addr_i)
-                    `CSR_MSTATUS: mstatus_r <= mask_mstatus(csr_apply_op(csr_commit_op_i, mstatus_r, csr_commit_wdata_i));
-                    `CSR_MIE: mie_r <= csr_apply_op(csr_commit_op_i, mie_r, csr_commit_wdata_i) & MIE_MIP_MASK;
-                    `CSR_MTVEC: mtvec_r <= mask_mtvec(csr_apply_op(csr_commit_op_i, mtvec_r, csr_commit_wdata_i));
-                    `CSR_MSCRATCH: mscratch_r <= csr_apply_op(csr_commit_op_i, mscratch_r, csr_commit_wdata_i);
-                    `CSR_MEPC: mepc_r <= mask_mepc(csr_apply_op(csr_commit_op_i, mepc_r, csr_commit_wdata_i));
-                    `CSR_MCAUSE: mcause_r <= csr_apply_op(csr_commit_op_i, mcause_r, csr_commit_wdata_i);
-                    `CSR_MTVAL: mtval_r <= csr_apply_op(csr_commit_op_i, mtval_r, csr_commit_wdata_i);
-                    `CSR_MIP: mip_r <= csr_apply_op(csr_commit_op_i, mip_r, csr_commit_wdata_i) & MIE_MIP_MASK;
-                    `CSR_MCYCLE: mcycle_o <= csr_apply_op(csr_commit_op_i, mcycle_o, csr_commit_wdata_i);
-                    `CSR_MINSTRET: minstret_o <= csr_apply_op(csr_commit_op_i, minstret_o, csr_commit_wdata_i);
+                    `CSR_MSTATUS: mstatus_r <= mask_mstatus(csr_commit_next_value);
+                    `CSR_MIE: mie_r <= csr_commit_next_value & MIE_MIP_MASK;
+                    `CSR_MTVEC: mtvec_r <= mask_mtvec(csr_commit_next_value);
+                    `CSR_MSCRATCH: mscratch_r <= csr_commit_next_value;
+                    `CSR_MEPC: mepc_r <= mask_mepc(csr_commit_next_value);
+                    `CSR_MCAUSE: mcause_r <= csr_commit_next_value;
+                    `CSR_MTVAL: mtval_r <= csr_commit_next_value;
+                    `CSR_MIP: mip_r <= csr_commit_next_value & MIE_MIP_MASK;
+                    `CSR_MCYCLE: begin
+                        if (XLEN == 32) begin
+                            mcycle_r[31:0] <= csr_commit_next_value[31:0];
+                        end else begin
+                            mcycle_r <= csr_commit_next_value;
+                        end
+                    end
+                    `CSR_MINSTRET: begin
+                        if (XLEN == 32) begin
+                            minstret_r[31:0] <= csr_commit_next_value[31:0];
+                        end else begin
+                            minstret_r <= csr_commit_next_value;
+                        end
+                    end
+                    `CSR_MCYCLEH: begin
+                        if (XLEN == 32) begin
+                            mcycle_r[63:32] <= csr_commit_next_value[31:0];
+                        end
+                    end
+                    `CSR_MINSTRETH: begin
+                        if (XLEN == 32) begin
+                            minstret_r[63:32] <= csr_commit_next_value[31:0];
+                        end
+                    end
                     default: begin
                     end
                 endcase

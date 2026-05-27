@@ -145,6 +145,16 @@ module tb_csr_unit_zicsr;
         csr_commit(`CSR_OP_RC, `CSR_MSCRATCH, 32'h00000078, 1'b0);
         csr_read_expect(`CSR_MSCRATCH, 32'h1234ff00);
 
+        csr_commit(`CSR_OP_RW, `CSR_MCYCLE, 32'h89abcdef, 1'b0);
+        csr_read_expect(`CSR_MCYCLE, 32'h89abcdef);
+        csr_commit(`CSR_OP_RW, `CSR_MCYCLEH, 32'h12345678, 1'b0);
+        csr_read_expect(`CSR_MCYCLEH, 32'h12345678);
+
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRET, 32'h01020304, 1'b0);
+        csr_read_expect(`CSR_MINSTRET, 32'h01020304);
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRETH, 32'h11223344, 1'b0);
+        csr_read_expect(`CSR_MINSTRETH, 32'h11223344);
+
         csr_commit(`CSR_OP_RWI, `CSR_MSCRATCH, 32'h0000001f, 1'b0);
         csr_read_expect(`CSR_MSCRATCH, 32'h0000001f);
 

@@ -153,6 +153,21 @@ module tb_csr_unit_xlen64;
         csr_commit(`CSR_OP_RW, `CSR_MSCRATCH, 64'hfedcba9876543210);
         csr_read_expect(`CSR_MSCRATCH, 64'hfedcba9876543210);
 
+        trap_commit_valid_i = 1'b1;
+        trap_mepc_i = 64'h0000000080000123;
+        trap_mcause_i = {60'h000000000000000, `CAUSE_ILLEGAL_INSTRUCTION};
+        trap_mtval_i = 64'h00000000f11290f3;
+        @(posedge clk);
+        #1;
+        clear_req();
+        csr_read_expect(`CSR_MEPC, 64'h0000000080000120);
+        csr_read_expect(`CSR_MCAUSE, 64'h0000000000000002);
+        csr_read_expect(`CSR_MTVAL, 64'h00000000f11290f3);
+        if (mret_pc_o !== 64'h0000000080000120) begin
+            $display("FAIL RV64 mret_pc expected=0000000080000120 got=%016x", mret_pc_o);
+            $finish;
+        end
+
         $display("PASS csr_unit xlen64 regression completed");
         $finish;
     end
