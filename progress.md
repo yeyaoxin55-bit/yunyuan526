@@ -1189,3 +1189,30 @@
   - Local commit created for `Align CSR commits with retire boundary`.
   - `git push` failed twice because the local machine could not connect to `github.com:443`; `Test-NetConnection github.com -Port 443` reported `TcpTestSucceeded: False` while ping still succeeded.
   - Branch remains one commit ahead of `origin/新增CSR` until network connectivity to GitHub is restored.
+
+## 2026-05-28 CSR Branch Session - Phase 53 acceptance/timing
+- User approved the next recommended strategy: add a reusable CSR phase acceptance script and run Huoyue/Zynq-7020 100 MHz timing signoff before adding more CSR functionality.
+- TDD RED for the acceptance script:
+  - Added `scripts/check_csr_phase_acceptance.ps1`.
+  - First run failed as intended with `Missing CSR phase acceptance script: scripts/run_csr_phase_acceptance.ps1`.
+- Implemented `scripts/run_csr_phase_acceptance.ps1`:
+  - default flow runs CSR simulation acceptance plus Huoyue `soc_top` Vivado implementation and QoR/timing gates;
+  - `-SkipVivado` runs the fast simulation-only acceptance path.
+- Added `scripts/check_vivado_timing.ps1` after discovering that `run_vivado_impl.ps1` can generate a bitstream even with negative WNS.
+  - RED timing gate on the current Phase 53 report failed as intended: WNS `-3.121 ns`.
+  - GREEN timing gate checks were verified on historical passing reports with WNS `0.000`, `0.018`, and `0.203`.
+- Verification:
+  - `scripts/check_csr_phase_acceptance.ps1`: pass.
+  - `scripts/check_project.ps1`: pass.
+  - `git diff --check`: pass.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`: pass with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 measured cycles `649741`, CPI `1.110780`.
+  - `scripts/check_vivado_qor.ps1 -ReportDir build\vivado_impl_soc_top_csr_phase53_100m -Top soc_top -MaxDistributedRam 64 -MinBlockRamTiles 1 -RequireDmemBlockRam`: pass, `RAMD64E=0 BlockRAM=24`.
+- Vivado timing result:
+  - Command: `scripts/run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build\vivado_impl_soc_top_csr_phase53_100m -Jobs 4 -PlaceDirective AltSpreadLogic_high -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore`.
+  - Implementation generated `build/vivado_impl_soc_top_csr_phase53_100m/soc_top.bit`, but timing failed.
+  - Timing summary: WNS `-3.121 ns`, TNS `-4637.885 ns`, setup failing endpoints `2782`, WHS `0.028 ns`.
+  - Utilization: LUT `6962`, FF `6562`, BRAM36 `24`, DSP `12`, BUFGCTRL `5`, MMCME2_ADV `1`.
+  - Worst setup path is `u_core/mul_meta_rd_pipe_reg[2][0]/C` to `u_core/pc_reg[2]_rep/D`, data path delay `12.887 ns`, route `76.340%`, 16 logic levels.
+- Current decision:
+  - CSR branch is functionally accepted in simulation but not signed off for 100 MHz Huoyue hardware.
+  - Next phase should rescue the PC/redirect/hazard control timing before adding `zicntr`, asynchronous interrupts, PMP, or debug trigger CSRs.

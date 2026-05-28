@@ -576,3 +576,10 @@
 - The official first-stage `rv32mi` acceptance set can now include `instret_overflow` in addition to `csr,mcsr,illegal,scall,sbreak,shamt,lh-misaligned,lw-misaligned,sh-misaligned,sw-misaligned,ma_fetch,ma_addr`.
 - The added CSR precision stalls mainly affect CSR-heavy tests. The short CoreMark smoke moved only from the previous `649739`-class measured cycles to `649741`, so this is a good correctness tradeoff for the CSR branch.
 - Remaining first-stage exclusions are unchanged: user counter aliases used by `zicntr`, debug trigger/breakpoint CSRs, PMP, asynchronous interrupt response, and Vivado timing sign-off are still future phases.
+
+## 2026-05-28 CSR Phase 53 Findings
+- CSR functional acceptance should be scriptable. `run_csr_phase_acceptance.ps1 -SkipVivado` now provides a repeatable simulation gate for the CSR branch instead of relying on a hand-run command list.
+- `run_vivado_impl.ps1` is not a timing acceptance gate by itself. It can complete, write a bitstream, and return exit 0 even when post-route WNS is negative. Hardware signoff needs an explicit timing report gate, now added as `check_vivado_timing.ps1`.
+- The current CSR branch passes simulation acceptance but fails Huoyue `soc_top` 100 MHz timing. The `alt_spread` implementation has correct memory QoR (`RAMD64E=0`, `BlockRAM=24`) and moderate resources (`6962` LUT), so the immediate blocker is timing, not BRAM inference or resource overflow.
+- The worst path is a route-dominated PC/redirect/control cone from `mul_meta_rd_pipe[2][0]` to `pc_reg[2]_rep`, with Vivado-optimized logic names crossing multiplier, CSR, redirect, and PC-select logic. This points to the control/hazard/redirect path, not the CSR bank arithmetic, as the next area to inspect.
+- Do not add more privileged features until this path is addressed. Adding `zicntr`, async interrupts, PMP, or debug CSRs would increase control/state pressure before the current branch has a timing-clean hardware baseline.

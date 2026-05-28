@@ -549,3 +549,19 @@
   - Local CSR trap programs, CSR unit regression including XLEN64, full ModelSim RTL regression, selected `rv32ui`/`rv32um` smoke tests, and CoreMark 2 smoke all pass.
 - Known exclusions:
   - `rv32mi/zicntr` user counter aliases, debug trigger/breakpoint CSRs, PMP, async interrupts, and Vivado timing sign-off remain outside this phase.
+
+## Phase 53 CSR Acceptance Script and Huoyue Timing Signoff - Timing Blocked
+- Goal: turn the Phase 50-52 CSR validation sequence into a reusable acceptance script, then check whether the current CSR branch still closes Huoyue/Zynq-7020 100 MHz timing.
+- Implemented tooling:
+  - `scripts/run_csr_phase_acceptance.ps1` runs project structure checks, CSR unit regression, local CSR trap programs, accepted official `rv32mi`, `rv32ui`/`rv32um` smoke tests, CoreMark 2 smoke, and optionally Huoyue `soc_top` Vivado implementation.
+  - `scripts/check_csr_phase_acceptance.ps1` statically guards that the acceptance script keeps the expected CSR, CoreMark, Vivado, QoR, and timing gates.
+  - `scripts/check_vivado_timing.ps1` rejects post-route reports with negative WNS or setup/hold failing endpoints, fixing the previous gap where `run_vivado_impl.ps1` could generate a bitstream even when timing failed.
+- Acceptance evidence:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 remained `649741` measured cycles.
+  - Huoyue `soc_top` 100 MHz `alt_spread` implementation generated a bitstream and passed QoR: LUT `6962`, FF `6562`, BRAM36 `24`, DSP `12`, RAMD64E `0`.
+- Timing blocker:
+  - The same Huoyue implementation failed setup timing: WNS `-3.121 ns`, TNS `-4637.885 ns`, `2782` setup failing endpoints, WHS `0.028 ns`.
+  - Worst path: `u_core/mul_meta_rd_pipe_reg[2][0]/C` to `u_core/pc_reg[2]_rep/D`, route-dominated at `76.340%`, through multiplier/CSR/redirect/PC-select optimized logic.
+- Decision:
+  - Do not add `zicntr`, async interrupts, PMP, or debug CSR features yet.
+  - Next work should be a timing rescue phase focused on the PC/redirect/hazard control cone exposed by the CSR branch.
