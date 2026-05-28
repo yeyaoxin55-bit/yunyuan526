@@ -568,3 +568,11 @@
 - `rv32mi/instret_overflow` is now the main precise-counter gap. Focused `csr_unit` coverage proves low/high `minstret` overflow state update works, but the CPU-level test still fails when reading `minstreth` after the overflow sequence. The next fix should inspect retire-count timing versus CSR read visibility, not the basic CSR bank arithmetic.
 - `rv32mi/zicntr` is not first-stage acceptance because it uses user-level counter aliases such as `cycle` and `instret` at `0xC00/0xC02`, which are not implemented in the current M-mode-only CSR bank.
 - `rv32mi/breakpoint` and PMP-oriented tests remain out of scope: debug trigger CSRs (`tcontrol`, `tselect`, `tdata*`) and PMP registers are deliberately not part of this CSR phase.
+
+## 2026-05-28 CSR Phase 52 Findings
+- Normal CSR state updates must be aligned to the retire boundary, not to EX/MEM. Otherwise split writes to counter CSRs can be interleaved with implicit `mcycle/minstret` updates and become architecturally visible in the wrong order.
+- The `csr_unit` explicit-counter-write priority was correct, but only once `cpu_core` presented ordinary CSR commits at the same boundary as `retire_count_i`. The bug was top-level pipeline timing, not CSR-bank arithmetic.
+- A younger CSR-state reader must stall while an older CSR instruction is still in ID/EX, EX/MEM, or MEM/WB. A hazard that only watches EX/MEM is too narrow after CSR commits move to MEM/WB.
+- The official first-stage `rv32mi` acceptance set can now include `instret_overflow` in addition to `csr,mcsr,illegal,scall,sbreak,shamt,lh-misaligned,lw-misaligned,sh-misaligned,sw-misaligned,ma_fetch,ma_addr`.
+- The added CSR precision stalls mainly affect CSR-heavy tests. The short CoreMark smoke moved only from the previous `649739`-class measured cycles to `649741`, so this is a good correctness tradeoff for the CSR branch.
+- Remaining first-stage exclusions are unchanged: user counter aliases used by `zicntr`, debug trigger/breakpoint CSRs, PMP, asynchronous interrupt response, and Vivado timing sign-off are still future phases.

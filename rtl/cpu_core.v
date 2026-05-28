@@ -104,6 +104,11 @@ module cpu_core #(
     reg [4:0] mem_wb_rd;
     reg mem_wb_reg_write;
     reg [1:0] mem_wb_wb_sel;
+    reg mem_wb_csr_instr;
+    reg [2:0] mem_wb_csr_op;
+    reg [11:0] mem_wb_csr_addr;
+    reg [31:0] mem_wb_csr_wdata;
+    reg mem_wb_csr_rd_zero;
     reg load_resp_valid;
     reg [4:0] load_resp_rd;
     reg [2:0] load_resp_funct3;
@@ -319,11 +324,11 @@ module cpu_core #(
         .csr_read_rd_zero_i(id_ex_rd == 5'd0),
         .csr_read_data_o(csr_rdata),
         .csr_read_illegal_o(csr_read_illegal),
-        .csr_commit_valid_i(ex_mem_valid && ex_mem_csr_instr && !replay_flush),
-        .csr_commit_op_i(ex_mem_csr_op),
-        .csr_commit_addr_i(ex_mem_csr_addr),
-        .csr_commit_wdata_i(ex_mem_csr_wdata),
-        .csr_commit_rd_zero_i(ex_mem_csr_rd_zero),
+        .csr_commit_valid_i(mem_wb_retire_valid && mem_wb_csr_instr),
+        .csr_commit_op_i(mem_wb_csr_op),
+        .csr_commit_addr_i(mem_wb_csr_addr),
+        .csr_commit_wdata_i(mem_wb_csr_wdata),
+        .csr_commit_rd_zero_i(mem_wb_csr_rd_zero),
         .trap_commit_valid_i(trap_redirect_detect),
         .trap_mepc_i(ex_trap_mepc),
         .trap_mcause_i(ex_trap_cause),
@@ -367,10 +372,12 @@ module cpu_core #(
                                   dec_jump ||
                                   dec_mem_read ||
                                   dec_mem_write;
+    wire csr_hazard_pending = (id_ex_valid && id_ex_csr_instr) ||
+                              (ex_mem_valid && ex_mem_csr_instr) ||
+                              (mem_wb_valid && mem_wb_csr_instr);
     wire csr_hazard_stall = if_id_valid &&
                              if_id_csr_state_reader &&
-                             id_ex_valid &&
-                             id_ex_csr_instr;
+                             csr_hazard_pending;
     assign hazard_stall = raw_hazard_stall || csr_hazard_stall;
     wire dec_uses_rs1 = (dec_opcode == `OPCODE_JALR) ||
                         (dec_opcode == `OPCODE_BRANCH) ||
@@ -1117,6 +1124,11 @@ module cpu_core #(
             mem_wb_rd <= 5'd0;
             mem_wb_reg_write <= 1'b0;
             mem_wb_wb_sel <= 2'd0;
+            mem_wb_csr_instr <= 1'b0;
+            mem_wb_csr_op <= `CSR_OP_NONE;
+            mem_wb_csr_addr <= 12'h000;
+            mem_wb_csr_wdata <= 32'h00000000;
+            mem_wb_csr_rd_zero <= 1'b0;
             load_resp_valid <= 1'b0;
             load_resp_rd <= 5'd0;
             load_resp_funct3 <= 3'd0;
@@ -1326,6 +1338,11 @@ module cpu_core #(
             mem_wb_rd <= ex_mem_rd;
             mem_wb_reg_write <= ex_mem_reg_write;
             mem_wb_wb_sel <= ex_mem_wb_sel;
+            mem_wb_csr_instr <= ex_mem_csr_instr;
+            mem_wb_csr_op <= ex_mem_csr_op;
+            mem_wb_csr_addr <= ex_mem_csr_addr;
+            mem_wb_csr_wdata <= ex_mem_csr_wdata;
+            mem_wb_csr_rd_zero <= ex_mem_csr_rd_zero;
 
             if (flush) begin
                 ex_mem_valid <= 1'b0;

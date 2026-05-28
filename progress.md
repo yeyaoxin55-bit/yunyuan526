@@ -1160,3 +1160,32 @@
 - `rv32mi/instret_overflow` remains failing at CPU level with fail marker TESTNUM 4 at cycle 62. The focused CSR-unit overflow test passes, so this is recorded as a next-stage precise `minstret` retirement/read visibility issue in the pipelined core.
 - Local CSR trap regression passes: `csr_rw`, `ecall_mret`, `ebreak`, `illegal_csr`, `illegal_instr`, `misaligned_store`, `misaligned_load`, `misaligned_branch`, `misaligned_jal`, and `misaligned_jalr` at cycles 72, 72, 71, 80, 75, 74, 75, 72, 76, and 78.
 - Additional checks pass: `scripts/check_project.ps1`; full `scripts/run_modelsim.ps1`; selected official `rv32ui` smoke `add,beq,jal,jalr,lw,sw`; selected official `rv32um` smoke `mul,div`.
+
+## 2026-05-28 CSR Branch Session - instret_overflow
+- User approved continuing with the next recommended blocker: fix official `rv32mi/instret_overflow`.
+- RED reproduced:
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests instret_overflow` exited 1.
+  - Failure was `FAIL external: fail marker at cycle 62 value=00000004`, with ModelSim compile at 0 errors and 0 warnings.
+- Root cause:
+  - Ordinary CSR writes were committed from EX/MEM, while `minstret` implicit increments are tied to the MEM/WB retire boundary.
+  - The official overflow sequence writes `minstret`, then `minstreth`; the early low-half write could be followed by an implicit retire increment before the high-half write committed, leaving `minstreth` nonzero.
+- RTL fix in `rtl/cpu_core.v`:
+  - Added MEM/WB CSR metadata registers.
+  - Drove `csr_unit` ordinary CSR commit from `mem_wb_retire_valid && mem_wb_csr_instr`.
+  - Extended CSR-state hazard detection across ID/EX, EX/MEM, and MEM/WB.
+- Verification after the fix:
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests instret_overflow`: pass at cycle 74.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests csr,mcsr,illegal,scall,sbreak,shamt,lh-misaligned,lw-misaligned,sh-misaligned,sw-misaligned,ma_fetch,ma_addr,instret_overflow`: pass.
+  - `scripts/run_csr_trap_programs.ps1 -Tests csr_rw,ecall_mret,ebreak,illegal_csr,illegal_instr,misaligned_store,misaligned_load,misaligned_branch,misaligned_jal,misaligned_jalr`: pass.
+  - `scripts/run_csr_unit_modelsim.ps1`: pass for Zicsr, trap/MRET, and XLEN64 tests.
+  - `scripts/run_modelsim.ps1`: pass with 0 errors and 0 warnings.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32ui -Tests add,beq,jal,jalr,lw,sw`: pass.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32um -Tests mul,div`: pass.
+  - CoreMark 2 smoke with `-O3 -funroll-loops`: pass; measured cycles `649741`, sim cycle `666788`, CPI `1.110780`.
+- Observed performance/test impact:
+  - CSR-heavy official tests take more cycles because CSR readers now wait for precise retire-visible state.
+  - CoreMark changed by only two measured cycles relative to the previous CSR smoke, so the precise CSR boundary has negligible impact on the current workload.
+- Commit/push status:
+  - Local commit created for `Align CSR commits with retire boundary`.
+  - `git push` failed twice because the local machine could not connect to `github.com:443`; `Test-NetConnection github.com -Port 443` reported `TcpTestSucceeded: False` while ping still succeeded.
+  - Branch remains one commit ahead of `origin/新增CSR` until network connectivity to GitHub is restored.

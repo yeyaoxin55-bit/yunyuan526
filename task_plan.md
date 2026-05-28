@@ -533,3 +533,19 @@
   - `rv32mi/instret_overflow` still fails at CPU level and is the next precise-counter pipeline task; `csr_unit` focused overflow coverage now passes.
   - `rv32mi/zicntr` is outside the current first-stage CSR bank because it uses user counter aliases such as `cycle` and `instret`.
   - `rv32mi/breakpoint` and PMP tests are outside this phase because debug trigger CSRs and PMP are intentionally not implemented.
+
+## Phase 52 Precise CSR Retire Boundary - Complete
+- Goal: make `rv32mi/instret_overflow` pass by aligning normal CSR writes with the same retirement boundary that drives implicit `minstret` updates.
+- RED evidence:
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests instret_overflow` failed at cycle 62 with fail marker value `00000004`.
+  - Signal inspection showed `csrw minstret` committed from EX/MEM before the retire boundary, then an implicit `minstret` increment interleaved before the following `csrw minstreth`.
+- Accepted fix:
+  - Ordinary CSR writes now commit from MEM/WB retire, not EX/MEM.
+  - MEM/WB carries CSR operation metadata needed by `csr_unit`.
+  - CSR-state hazard detection now includes older CSR instructions in ID/EX, EX/MEM, and MEM/WB so younger CSR-state readers observe precise state.
+- Acceptance evidence:
+  - `rv32mi/instret_overflow` now passes.
+  - Accepted first-stage official `rv32mi` set now passes including `csr,mcsr,illegal,scall,sbreak,shamt,lh-misaligned,lw-misaligned,sh-misaligned,sw-misaligned,ma_fetch,ma_addr,instret_overflow`.
+  - Local CSR trap programs, CSR unit regression including XLEN64, full ModelSim RTL regression, selected `rv32ui`/`rv32um` smoke tests, and CoreMark 2 smoke all pass.
+- Known exclusions:
+  - `rv32mi/zicntr` user counter aliases, debug trigger/breakpoint CSRs, PMP, async interrupts, and Vivado timing sign-off remain outside this phase.
