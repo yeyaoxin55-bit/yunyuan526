@@ -19,11 +19,23 @@
 #define RVTEST_CODE_BEGIN                                               \
         .section .text.init, "ax";                                      \
         .align 2;                                                       \
+        .weak mtvec_handler;                                            \
         .globl _start;                                                  \
 _start:                                                                 \
+        j yl3_rvtest_reset_vector;                                      \
+        .align 2;                                                       \
+yl3_rvtest_trap_vector:                                                 \
+        la t5, mtvec_handler;                                           \
+        beqz t5, yl3_rvtest_unhandled_trap;                             \
+        jr t5;                                                          \
+yl3_rvtest_unhandled_trap:                                              \
+        RVTEST_FAIL;                                                    \
+yl3_rvtest_reset_vector:                                                \
         la sp, __stack_top;                                             \
         la gp, __global_pointer$;                                       \
-        li TESTNUM, 0;
+        li TESTNUM, 0;                                                  \
+        la t0, yl3_rvtest_trap_vector;                                  \
+        csrw mtvec, t0;
 
 #define RVTEST_CODE_END                                                 \
 1:      j 1b

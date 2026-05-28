@@ -101,7 +101,6 @@ module csr_unit #(
         input [11:0] addr;
         begin
             case (addr)
-                `CSR_MISA,
                 `CSR_MVENDORID,
                 `CSR_MARCHID,
                 `CSR_MIMPID,

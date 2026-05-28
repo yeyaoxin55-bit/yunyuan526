@@ -1143,3 +1143,20 @@
   - CoreMark smoke passed with iterations 2, total data size 2000, O3/unroll: measured cycles `649739`, sim cycle `666784`, CPI `1.110777`.
   - Official `rv32mi` CSR smoke passed for `csr,mcsr` after defaulting riscv-test builds to `rv32im_zicsr_zifencei` and including official `riscv-tests/env/encoding.h`.
   - Official `rv32mi/illegal` still times out in this repo's minimal riscv-test harness because the local environment does not install the official machine trap-vector startup path yet; this is recorded as a harness limitation, not counted as first-stage RTL acceptance.
+
+## 2026-05-28 CSR Branch Session
+- User approved the next recommended step: add a machine-mode riscv-test trap harness before moving on to async interrupts or larger privileged features.
+- Restored Phase 50 context from `task_plan.md`, `findings.md`, and `progress.md`; current branch is `新增CSR` tracking `origin/新增CSR` with no code changes at session start.
+- TDD RED: `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal` exits 1 after timeout at 200000 cycles, with pass marker `00000000` and fail marker `00000000`. Build and ModelSim compile succeed with 0 errors and 0 warnings, so the failure is the expected missing harness behavior.
+- Design for Phase 51: adapt the official riscv-tests `env/p` trap-vector pattern, but keep the project-specific pass/fail memory addresses and avoid unsupported PMP/SATP/delegation initialization.
+- Implemented a minimal machine-mode riscv-test startup in `sw/riscv-tests-env/riscv_test.h`: `_start` now initializes `sp`, `gp`, `TESTNUM`, installs `mtvec`, and the local trap vector jumps to an optional weak `mtvec_handler` or fails for unexpected traps.
+- GREEN `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal`: pass at cycle 87.
+- Expanded official `rv32mi` first-stage acceptance:
+  - `csr` pass cycle 117; `mcsr` 46; `illegal` 87; `scall` 80; `sbreak` 58; `shamt` 51.
+  - `lh-misaligned` pass cycle 70; `lw-misaligned` 150; `sh-misaligned` 81; `sw-misaligned` 157.
+  - `ma_fetch` pass cycle 266; `ma_addr` pass cycle 342.
+- `ma_fetch` initially failed at TESTNUM 7 because it writes `misa.C` to test unsupported compressed fetch behavior. Fixed `csr_unit` so writes to `misa` are legal WARL no-ops that leave the fixed RV32IM/RV64IM value unchanged.
+- Added focused CSR-unit coverage for legal unchanged `misa` writes and RV32 `minstret/minstreth` overflow. `scripts/run_csr_unit_modelsim.ps1` passes after these changes.
+- `rv32mi/instret_overflow` remains failing at CPU level with fail marker TESTNUM 4 at cycle 62. The focused CSR-unit overflow test passes, so this is recorded as a next-stage precise `minstret` retirement/read visibility issue in the pipelined core.
+- Local CSR trap regression passes: `csr_rw`, `ecall_mret`, `ebreak`, `illegal_csr`, `illegal_instr`, `misaligned_store`, `misaligned_load`, `misaligned_branch`, `misaligned_jal`, and `misaligned_jalr` at cycles 72, 72, 71, 80, 75, 74, 75, 72, 76, and 78.
+- Additional checks pass: `scripts/check_project.ps1`; full `scripts/run_modelsim.ps1`; selected official `rv32ui` smoke `add,beq,jal,jalr,lw,sw`; selected official `rv32um` smoke `mul,div`.

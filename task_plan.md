@@ -511,3 +511,25 @@
 - Known remaining work:
   - Add a real machine-mode riscv-test startup/trap harness before treating official `rv32mi` trap tests as acceptance.
   - Async interrupt response, CLINT/PLIC, PMP, MMU, S/U mode, and Vivado timing sign-off remain outside this first stage.
+
+## Phase 51 Official RV32MI Trap Harness - Complete
+- Goal: make the official `rv32mi` machine trap tests usable as first-stage CSR/trap acceptance tests instead of timing out in the local minimal harness.
+- Design:
+  - Keep the local fixed pass/fail memory addresses used by `tb_external_program`.
+  - Add a machine-mode `mtvec` startup path in `sw/riscv-tests-env/riscv_test.h`.
+  - Use a local trap vector that jumps to an optional weak `mtvec_handler`, matching the official riscv-tests pattern.
+  - Do not initialize unsupported PMP, SATP, medeleg, mideleg, S-mode, or U-mode state.
+  - Leave RV32UI/RV32UM pass/fail behavior compatible with the existing harness.
+- TDD acceptance:
+  - RED: `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal` times out with pass/fail markers still zero.
+  - GREEN target: `rv32mi/illegal` passes, then expand to `scall`, `sbreak`, and misaligned trap tests.
+- Acceptance evidence:
+  - RED reproduced: `rv32mi/illegal` timed out at 200000 cycles with both external pass/fail markers still zero.
+  - GREEN: `rv32mi/illegal` passes with the machine-mode trap harness installed.
+  - Accepted official `rv32mi` first-stage suite passes: `csr,mcsr,illegal,scall,sbreak,shamt,lh-misaligned,lw-misaligned,sh-misaligned,sw-misaligned,ma_fetch,ma_addr`.
+  - Local CSR trap programs still pass for `csr_rw`, `ecall_mret`, `ebreak`, `illegal_csr`, `illegal_instr`, `misaligned_store`, `misaligned_load`, `misaligned_branch`, `misaligned_jal`, and `misaligned_jalr`.
+  - `scripts/run_csr_unit_modelsim.ps1`, full `scripts/run_modelsim.ps1`, `scripts/check_project.ps1`, selected official `rv32ui`, and selected official `rv32um` smoke tests pass.
+- Known exclusions:
+  - `rv32mi/instret_overflow` still fails at CPU level and is the next precise-counter pipeline task; `csr_unit` focused overflow coverage now passes.
+  - `rv32mi/zicntr` is outside the current first-stage CSR bank because it uses user counter aliases such as `cycle` and `instret`.
+  - `rv32mi/breakpoint` and PMP tests are outside this phase because debug trigger CSRs and PMP are intentionally not implemented.

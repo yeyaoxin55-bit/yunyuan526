@@ -233,6 +233,16 @@ module tb_csr_unit_zicsr;
         csr_read_expect(`CSR_MINSTRETH, 32'h00000022);
         csr_read_expect(`CSR_MINSTRET, 32'hfffffffe);
 
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRET, 32'hffffffff, 1'b0);
+        csr_commit(`CSR_OP_RW, `CSR_MINSTRETH, 32'hffffffff, 1'b0);
+        retire_i = 1'b1;
+        retire_count_i = 2'd1;
+        @(posedge clk);
+        #1;
+        clear_req();
+        csr_read_expect(`CSR_MINSTRET, 32'h00000000);
+        csr_read_expect(`CSR_MINSTRETH, 32'h00000000);
+
         csr_commit(`CSR_OP_RWI, `CSR_MSCRATCH, 32'h0000001f, 1'b0);
         csr_read_expect(`CSR_MSCRATCH, 32'h0000001f);
 
@@ -258,17 +268,11 @@ module tb_csr_unit_zicsr;
         end
         clear_req();
 
-        csr_read_valid_i = 1'b1;
-        csr_read_op_i = `CSR_OP_RW;
-        csr_read_addr_i = `CSR_MISA;
-        csr_read_wdata_i = 32'hffffffff;
-        csr_read_rd_zero_i = 1'b0;
-        #1;
-        if (!csr_read_illegal_o) begin
-            $display("FAIL write to read-only misa was not illegal");
-            $finish;
-        end
-        clear_req();
+        csr_read_expect(`CSR_MISA, 32'h40001100);
+        csr_commit(`CSR_OP_RSI, `CSR_MISA, 32'h00000004, 1'b0);
+        csr_read_expect(`CSR_MISA, 32'h40001100);
+        csr_commit(`CSR_OP_RW, `CSR_MISA, 32'hffffffff, 1'b0);
+        csr_read_expect(`CSR_MISA, 32'h40001100);
 
         $display("PASS csr_unit zicsr regression completed");
         $finish;
