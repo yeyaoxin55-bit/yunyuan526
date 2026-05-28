@@ -9,6 +9,8 @@ module regfile #(
     input wire we2,
     input wire [4:0] waddr2,
     input wire [XLEN-1:0] wdata2,
+    input wire bypass2_en,
+    input wire [XLEN-1:0] bypass2_data,
     input wire [4:0] raddr1,
     output wire [XLEN-1:0] rraw1,
     output wire [XLEN-1:0] rdata1,
@@ -25,15 +27,15 @@ module regfile #(
     assign rraw2 = (raddr2 == 5'd0) ? {XLEN{1'b0}} : regs[raddr2];
     assign rdata1 = (raddr1 == 5'd0) ? {XLEN{1'b0}} :
                     (we && (waddr == raddr1) && (waddr != 5'd0)) ? wdata :
-                    (we2 && (waddr2 == raddr1) && (waddr2 != 5'd0)) ? wdata2 :
+                    (bypass2_en && we2 && (waddr2 == raddr1) && (waddr2 != 5'd0)) ? bypass2_data :
                     rraw1;
     assign rdata2 = (raddr2 == 5'd0) ? {XLEN{1'b0}} :
                     (we && (waddr == raddr2) && (waddr != 5'd0)) ? wdata :
-                    (we2 && (waddr2 == raddr2) && (waddr2 != 5'd0)) ? wdata2 :
+                    (bypass2_en && we2 && (waddr2 == raddr2) && (waddr2 != 5'd0)) ? bypass2_data :
                     rraw2;
     assign rdata3 = (raddr3 == 5'd0) ? {XLEN{1'b0}} :
                     (we && (waddr == raddr3) && (waddr != 5'd0)) ? wdata :
-                    (we2 && (waddr2 == raddr3) && (waddr2 != 5'd0)) ? wdata2 :
+                    (bypass2_en && we2 && (waddr2 == raddr3) && (waddr2 != 5'd0)) ? bypass2_data :
                     regs[raddr3];
 
     always @(posedge clk) begin

@@ -48,7 +48,7 @@ module tb_ras_return;
             end
 
             if (debug_dmem_word1 == 32'd1) begin
-                if (jump_flush_count != 0) begin
+                if (jump_flush_count != 1) begin
                     $display("FAIL ras-return jump flush count=%0d", jump_flush_count);
                     $finish;
                 end

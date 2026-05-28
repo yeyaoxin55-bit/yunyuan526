@@ -90,3 +90,7 @@ For official-style 10 second validation at 100 MHz, the prepared `ten_sec` image
 ## Load-use stall setting
 
 The current performance RTL uses combinational DMEM read and defaults `ENABLE_LOAD_USE_STALL=0`. If DMEM is later converted to true synchronous BRAM read, set `ENABLE_LOAD_USE_STALL=1` or redesign the load-data timing path.
+
+## RV64 timing note
+
+The `soc_top` board default disables multiply early forwarding with `ENABLE_MUL_EARLY_FORWARD=0` and multiply complete forwarding with `ENABLE_MUL_COMPLETE_FORWARD=0`. This keeps the RV64M multiplier result out of the same-cycle EX operand forwarding paths that have shown up as the worst 100 MHz routed timing paths. Generic `cpu_top` simulations can still enable these forwarding paths explicitly when measuring performance tradeoffs.

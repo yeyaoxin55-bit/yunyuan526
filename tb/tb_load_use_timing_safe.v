@@ -53,7 +53,7 @@ module tb_load_use_timing_safe;
                     $display("FAIL load-use-timing-safe result: word2=%08x", debug_dmem_word2);
                     $finish;
                 end
-                if (load_use_stall_count != 2) begin
+                if (load_use_stall_count != 3) begin
                     $display("FAIL load-use-timing-safe count=%0d", load_use_stall_count);
                     $finish;
                 end

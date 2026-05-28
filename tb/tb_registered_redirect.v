@@ -44,8 +44,18 @@ module tb_registered_redirect;
             end
             @(posedge clk);
             #1;
+            if (!dut.u_core.redirect_stage_valid) begin
+                $display("FAIL registered redirect: redirect pre-stage missing after first register edge");
+                $finish;
+            end
+            if (dut.u_core.flush) begin
+                $display("FAIL registered redirect: flush asserted from pre-stage before redirect commit edge");
+                $finish;
+            end
+            @(posedge clk);
+            #1;
             if (!dut.u_core.flush) begin
-                $display("FAIL registered redirect: flush missing after redirect register edge");
+                $display("FAIL registered redirect: flush missing after redirect commit edge");
                 $finish;
             end
         end

@@ -982,3 +982,62 @@
 - Root cause: manual Vivado GUI projects import `rtl/imem.v` under the Vivado project directory, so `soc_top`'s old default `IMEM_INIT_FILE="sw/uart_hello/uart_hello.hex"` was resolved relative to the Vivado project instead of the repository root. The file exists in the repository, but Vivado could not find it from that working directory.
 - Changed `soc_top` default `IMEM_INIT_FILE` to an empty string. Manual `soc_top` bitstreams now synthesize without depending on a repository-relative hello-program hex file, which matches the RV64 CoreMark UART download flow.
 - The `tb_soc_uart_hello` regression still explicitly passes `sw/uart_hello/uart_hello.hex`, so the old hello-program path remains tested for repository-root simulations.
+
+# 2026-05-26 RV64M timing mitigation: disable mul early forwarding
+
+- Analysis of the routed timing report showed the worst 100 MHz paths start at `u_core/u_multiplier/result_pipe` and pass through `mul_early_result` into `u_core/ex_mem_alu_result_reg`, with WNS around `-3.386 ns` and about 24-26 logic levels.
+- Added `ENABLE_MUL_EARLY_FORWARD` as an explicit CPU parameter. When disabled, the hazard logic no longer treats the multiplier early-result stage as forwardable, and the operand muxes do not select `mul_early_result`.
+- Kept generic `cpu_top` default enabled to preserve the existing performance simulation behavior, but set `soc_top` default to `ENABLE_MUL_EARLY_FORWARD=0` for the RV64 FPGA board path.
+- Added `tb_mul_result_no_early_forward` to prove the disabled path still computes the dependent `mul -> add` sequence correctly while taking an additional multiply-source stall.
+
+# 2026-05-27 RV64 timing closure with Explore physical implementation
+
+- Baseline post-route physopt report from the Vivado project had setup WNS `-0.803 ns`, TNS `-466.576 ns`, and 1395 failing endpoints. The dominant family was writeback/forward/control logic reaching ID/EX and prefetch CE/R controls.
+- Fast timing experiments showed that the retained RTL baseline still failed with `place_design -directive Quick` at WNS `-3.036 ns`, dominated by `mul_meta_valid_pipe_reg[0]` high-fanout control routing. The same RTL reached post-place WNS `+0.505 ns` with `place_design -directive Explore`; Vivado's placer physical synthesis replicated `u_core/mul_meta_valid_pipe_reg_n_0_[0]` 10 times.
+- Updated the fast post-place timing wrappers to default to `Explore`, while still allowing `-PlaceDirective Quick` for rough smoke checks.
+- Full implementation command:
+  - `powershell -ExecutionPolicy Bypass -File scripts\run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build\vivado_impl_soc_top_rv64_explore_20260527 -Jobs 4 -PlaceDirective Explore -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore`
+- Full post-route result:
+  - artifact: `build/vivado_impl_soc_top_rv64_explore_20260527/soc_top.bit`
+  - setup WNS `0.076 ns`
+  - setup TNS `0.000 ns`
+  - setup failing endpoints `0`
+  - hold WHS `0.030 ns`
+  - hold THS `0.000 ns`
+  - pulse-width WNS `4.020 ns`
+  - Slice LUTs `10095`
+  - Slice Registers `8006`
+  - Block RAM Tile `32`
+  - DSP `16`
+- Worst setup path after closure:
+  - source `u_core/if_id_instr_reg[5]/C`
+  - destination `u_core/id_ex_rs1_data_reg[7]/CE`
+  - data path delay `9.475 ns`
+  - logic levels `8`
+  - route share `84.063%`
+- `scripts/check_vivado_qor.ps1 -ReportDir build\vivado_impl_soc_top_rv64_explore_20260527 -Top soc_top -RequireDmemBlockRam` passed with `RAMD64E=0`, `BlockRAM=32`, confirming DMEM stayed in RAMB36E1.
+- Remaining timing notes: the design still reports no input/output delays for three board ports, but there are no unconstrained internal endpoints. Add board I/O delay constraints separately after the internal CPU timing closure remains stable.
+
+# 2026-05-28 Vivado project synthesis crash recovery
+
+- Root cause of the GUI synthesis failure was not the visible `[Synth 8-6014]` or `[Synth 8-7129]` cleanup warnings. The failing project run stopped while preparing an incremental guide design, with `runme.log` showing `got a mismatch regfile` followed by `EXCEPTION_ACCESS_VIOLATION`.
+- The existing Vivado project had `synth_1` configured with `AutoIncrementalCheckpoint=true` and an old `soc_top.dcp` incremental checkpoint. After the RV64 RTL changes, Vivado 2022.2 tried to compare against that stale guide checkpoint and crashed before normal synthesis completion.
+- Added `scripts/reset_vivado_project_runs.ps1` and `scripts/vivado_project_reset_runs.tcl` to synchronize RTL into the existing project, disable incremental checkpoints on `synth_1`/`impl_1`, reset the runs, and persist the project run properties.
+- Hardened the fast project timing Tcl flow so post-synth/post-place checks default to `synth_design -incremental_mode off`; `-AllowIncrementalCheckpoint` is still available for intentional incremental experiments.
+- Cleaned stale `hazard_unit` interface ports and always-unused MEM/WB shadow registers in `cpu_core` to reduce warning noise. The remaining project warnings around early-load ports are expected parameter-pruned logic when early-load replay is disabled.
+- Verification passed:
+  - `scripts/reset_vivado_project_runs.ps1`
+  - `scripts/run_vivado_post_synth_timing.ps1 -OutDir build\vivado_fast_synth_after_reset`, with generated run Tcl using `synth_design ... -incremental_mode off` and post-synth WNS `-0.583 ns`
+  - `scripts/check_project.ps1`
+  - `scripts/check_fast_timing_scripts.ps1`
+  - `scripts/check_rv64_multiplier_pipeline.ps1`
+  - `scripts/check_rtl_timing_risk.ps1`
+  - full `scripts/run_modelsim.ps1`
+
+## GUI Reopen Follow-Up
+
+- A subsequent GUI synthesis run showed the same crash because the Vivado GUI had written `AutoIncrementalCheckpoint=true` and `IncrementalCheckpoint="$PSRCDIR/utils_1/imports/synth_1/soc_top.dcp"` back into `yunyuan3_rv64.xpr`. The generated `synth_1/soc_top.tcl` again contained `read_checkpoint -auto_incremental -incremental .../soc_top.dcp`, and the crash repeated with `got a mismatch regfile`, `got a mismatch hazard_unit`, then `EXCEPTION_ACCESS_VIOLATION`.
+- Updated `scripts/reset_vivado_project_runs.ps1` to directly patch the `.xpr` before and after the Vivado Tcl reset, forcing `AutoIncrementalCheckpoint="false"` and removing stale `IncrementalCheckpoint` attributes from `synth_1`/`impl_1`.
+- Updated `scripts/sync_vivado_project_rtl.ps1` to apply the same `.xpr` patch by default, so the manual flow "sync RTL, then launch synthesis in GUI" also avoids stale incremental guide checkpoints. Use `-KeepIncrementalCheckpoint` only for intentional incremental experiments.
+- Re-ran `scripts/reset_vivado_project_runs.ps1`; the project now has `synth_1 AutoIncrementalCheckpoint="false"` and no `IncrementalCheckpoint` attribute.
+- Re-ran `scripts/run_vivado_post_synth_timing.ps1 -OutDir build\vivado_fast_synth_after_xpr_patch`; generated `synth_1/soc_top.tcl` uses `synth_design -top soc_top -part xc7z020clg400-1 -incremental_mode off`, and synthesis completed with `0 errors, 0 critical warnings`.
