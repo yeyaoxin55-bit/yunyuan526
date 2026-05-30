@@ -31,6 +31,9 @@ param(
   [int]$MemTraceEnd = 2147483647,
   [string]$WaveFile = "",
   [string]$TranscriptFile = "",
+  [int]$VlibTimeoutSec = 10,
+  [int]$VlogTimeoutSec = 45,
+  [int]$VsimTimeoutSec = 120,
   [switch]$LogAllSignals
 )
 
@@ -55,6 +58,69 @@ function Resolve-ArtifactPath {
   return $resolved
 }
 
+function Clear-StaleModelSimLock {
+  param([string]$LibraryPath)
+
+  $lockFile = Join-Path $LibraryPath "_lock"
+  if (-not (Test-Path -LiteralPath $lockFile)) {
+    return
+  }
+
+  $lockText = Get-Content -LiteralPath $lockFile -Raw -ErrorAction SilentlyContinue
+  $pidMatch = [regex]::Match($lockText, "pid\s*=\s*(\d+)")
+  if ($pidMatch.Success) {
+    $ownerPid = [int]$pidMatch.Groups[1].Value
+    $owner = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+    if ($owner) {
+      throw "ModelSim work library is locked by live process pid=$ownerPid at $lockFile"
+    }
+  }
+
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
+    try {
+      Remove-Item -LiteralPath $lockFile -Force -ErrorAction Stop
+      Write-Host "Removed stale ModelSim lock: $lockFile"
+      return
+    } catch {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+
+  throw "Stale ModelSim lock still present after retries: $lockFile"
+}
+
+function Quote-ProcessArg {
+  param([string]$Arg)
+
+  if ($Arg -match '[\s"]') {
+    return '"' + ($Arg -replace '"', '\"') + '"'
+  }
+  return $Arg
+}
+
+function Invoke-ProcessWithTimeout {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList,
+    [int]$TimeoutSec,
+    [string]$StdoutPath,
+    [string]$StderrPath
+  )
+
+  $argString = ($ArgumentList | ForEach-Object { Quote-ProcessArg $_ }) -join " "
+  $process = Start-Process -FilePath $FilePath `
+                           -ArgumentList $argString `
+                           -NoNewWindow `
+                           -PassThru `
+                           -RedirectStandardOutput $StdoutPath `
+                           -RedirectStandardError $StderrPath
+  if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    throw "Process timed out after ${TimeoutSec}s: $FilePath $argString"
+  }
+  return $process.ExitCode
+}
+
 $resolvedWaveFile = Resolve-ArtifactPath $WaveFile
 $resolvedTranscriptFile = Resolve-ArtifactPath $TranscriptFile
 
@@ -72,14 +138,21 @@ if (-not $vlib -or -not $vlog -or -not $vsim) {
   throw "ModelSim commands not found in PATH. Required: vlib, vlog, vsim."
 }
 
-$workDir = Join-Path "build" ("modelsim_external_{0}" -f $PID)
-if (Test-Path -LiteralPath $workDir) {
-  Remove-Item -LiteralPath $workDir -Recurse -Force
-}
+$workStamp = "{0}_{1}_{2}" -f $PID, (Get-Date -Format "yyyyMMddHHmmssfff"), ([Guid]::NewGuid().ToString("N").Substring(0, 8))
+$workDir = Join-Path "build" ("modelsim_external_{0}" -f $workStamp)
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 $workLib = ((Join-Path $workDir "work") -replace "\\", "/")
 
-& vlib $workLib
+$vlibStdoutPath = Join-Path $workDir "vlib_stdout.log"
+$vlibStderrPath = Join-Path $workDir "vlib_stderr.log"
+$vlibExitCode = Invoke-ProcessWithTimeout -FilePath $vlib.Source `
+                                          -ArgumentList @($workLib) `
+                                          -TimeoutSec $VlibTimeoutSec `
+                                          -StdoutPath $vlibStdoutPath `
+                                          -StderrPath $vlibStderrPath
+if ($vlibExitCode -ne 0) {
+  throw "ModelSim vlib failed; see $vlibStdoutPath and $vlibStderrPath"
+}
 
 $sources = @(
   "rtl/alu.v",
@@ -98,11 +171,26 @@ $sources = @(
   "tb/tb_external_program.v"
 )
 
-$compileOutput = & vlog -work $workLib +incdir+rtl @sources 2>&1
-$compileOutput
-if ($LASTEXITCODE -ne 0 -or (($compileOutput | Out-String) -match "Errors:\s*[1-9]")) {
-  throw "ModelSim vlog failed"
+$vlogStdoutPath = Join-Path $workDir "vlog_stdout.log"
+$vlogStderrPath = Join-Path $workDir "vlog_stderr.log"
+$vlogArgs = @("-work", $workLib, "+incdir+rtl") + $sources
+$vlogExitCode = Invoke-ProcessWithTimeout -FilePath $vlog.Source `
+                                          -ArgumentList $vlogArgs `
+                                          -TimeoutSec $VlogTimeoutSec `
+                                          -StdoutPath $vlogStdoutPath `
+                                          -StderrPath $vlogStderrPath
+$compileOutput = @()
+if (Test-Path -LiteralPath $vlogStdoutPath) {
+  $compileOutput += Get-Content -LiteralPath $vlogStdoutPath
 }
+if (Test-Path -LiteralPath $vlogStderrPath) {
+  $compileOutput += Get-Content -LiteralPath $vlogStderrPath
+}
+$compileOutput
+if ($vlogExitCode -ne 0 -or (($compileOutput | Out-String) -match "Errors:\s*[1-9]")) {
+  throw "ModelSim vlog failed; see $vlogStdoutPath and $vlogStderrPath"
+}
+Clear-StaleModelSimLock -LibraryPath $workLib
 
 $resolvedIMem = (Resolve-Path -LiteralPath $IMemHex).Path
 $plusargs = @(
@@ -157,7 +245,20 @@ $vsimArgs += $plusargs
 $doCommand = if ($LogAllSignals.IsPresent -or $resolvedWaveFile -ne "") { "log -r /*; run -all; quit -f" } else { "run -all; quit -f" }
 $vsimArgs += @("-do", $doCommand)
 
-$simOutput = & vsim @vsimArgs 2>&1
+$stdoutPath = Join-Path $workDir "vsim_stdout.log"
+$stderrPath = Join-Path $workDir "vsim_stderr.log"
+$vsimExitCode = Invoke-ProcessWithTimeout -FilePath $vsim.Source `
+                                          -ArgumentList $vsimArgs `
+                                          -TimeoutSec $VsimTimeoutSec `
+                                          -StdoutPath $stdoutPath `
+                                          -StderrPath $stderrPath
+$simOutput = @()
+if (Test-Path -LiteralPath $stdoutPath) {
+  $simOutput += Get-Content -LiteralPath $stdoutPath
+}
+if (Test-Path -LiteralPath $stderrPath) {
+  $simOutput += Get-Content -LiteralPath $stderrPath
+}
 $simOutput
 $simText = $simOutput | Out-String
 if ($resolvedTranscriptFile -ne "") {
@@ -166,6 +267,6 @@ if ($resolvedTranscriptFile -ne "") {
 if ($resolvedWaveFile -ne "") {
   Write-Host "MODELSIM_WLF=$resolvedWaveFile"
 }
-if ($LASTEXITCODE -ne 0 -or $simText -match "FAIL " -or $simText -match "Errors:\s*[1-9]") {
+if ($vsimExitCode -ne 0 -or $simText -match "FAIL " -or $simText -match "Errors:\s*[1-9]") {
   throw "External ModelSim test failed"
 }

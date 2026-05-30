@@ -28,7 +28,10 @@ volatile ee_s32 seed2_volatile = 0x8;
 volatile ee_s32 seed3_volatile = 0x8;
 #endif
 volatile ee_s32 seed4_volatile = ITERATIONS;
-volatile ee_s32 seed5_volatile = 0;
+#ifndef YL3_COREMARK_EXECS
+#define YL3_COREMARK_EXECS 0
+#endif
+volatile ee_s32 seed5_volatile = YL3_COREMARK_EXECS;
 
 ee_u32 default_num_contexts = 1;
 

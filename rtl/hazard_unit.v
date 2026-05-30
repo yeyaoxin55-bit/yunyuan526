@@ -33,8 +33,10 @@ module hazard_unit #(
                            (ex_mem_rd != 5'd0) &&
                            ((ex_mem_rd == if_id_rs1) || (ex_mem_rd == if_id_rs2));
 
+    // Timing-safe synchronous memory mode cannot replay branch/JALR from the
+    // same-cycle load response; hold every EX/MEM load consumer to the RF edge.
     wire if_id_needs_ex_mem_load_stall = if_id_conservative_load_use ||
-                                         ((ENABLE_LOAD_RESP_EX_FORWARD == 0) && !if_id_control_load_replay);
+                                         (ENABLE_LOAD_RESP_EX_FORWARD == 0);
     wire load_resp_decode_use = load_resp_reg_write &&
                                 (load_resp_rd != 5'd0) &&
                                 ((load_resp_rd == if_id_rs1) ||

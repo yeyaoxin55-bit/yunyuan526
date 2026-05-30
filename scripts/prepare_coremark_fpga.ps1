@@ -2,35 +2,51 @@ param(
   [string]$ToolPrefix = "riscv64-unknown-elf-",
   [ValidateSet(32, 64)]
   [int]$XLEN = 64,
+  [int]$Iterations = 2200,
   [int]$TotalDataSize = 2000,
   [uint32]$CpuHz = 100000000,
-  [int]$SmokeIterations = 2,
-  [int]$TenMsIterations = 2,
-  [int]$TenSecIterations = 1900,
-  [string]$OptLevel = "-O3",
-  [string]$ExtraCFlags = "-funroll-loops",
-  [string]$OutDir = "build/coremark/fpga"
+  [string]$OutDir = "build/coremark/fpga",
+  [switch]$PreserveExisting
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $resolvedOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $repoRoot $OutDir }
+$resolvedOutParent = Split-Path -Parent $resolvedOutDir
+New-Item -ItemType Directory -Force -Path $resolvedOutParent | Out-Null
 New-Item -ItemType Directory -Force -Path $resolvedOutDir | Out-Null
+$resolvedOutDir = (Resolve-Path -LiteralPath $resolvedOutDir).Path
 
-function Build-CoreMarkImage {
+if (-not $resolvedOutDir.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to clean output directory outside repo: $resolvedOutDir"
+}
+
+if (-not $PreserveExisting) {
+  Get-ChildItem -LiteralPath $resolvedOutDir -Force | Remove-Item -Recurse -Force
+}
+
+$stagingRoot = Join-Path (Split-Path -Parent $resolvedOutDir) ("_prepare_coremark_fpga_{0}" -f $PID)
+if (Test-Path -LiteralPath $stagingRoot) {
+  Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+
+$cases = @(
+  [pscustomobject]@{ Name = "o1"; OptLevel = "-O1"; ExtraCFlags = "-DCOREMARK_UART_OUTPUT=1" },
+  [pscustomobject]@{ Name = "o2"; OptLevel = "-O2"; ExtraCFlags = "-DCOREMARK_UART_OUTPUT=1" },
+  [pscustomobject]@{ Name = "o3"; OptLevel = "-O3"; ExtraCFlags = "-funroll-loops -DCOREMARK_UART_OUTPUT=1" }
+)
+
+function Build-FinalCoreMarkImage {
   param(
-    [string]$Name,
-    [int]$Iterations
+    [pscustomobject]$Case
   )
 
-  $imageDir = Join-Path $resolvedOutDir $Name
+  $imageDir = Join-Path $stagingRoot $Case.Name
   New-Item -ItemType Directory -Force -Path $imageDir | Out-Null
-  $fpgaExtraCFlags = "-DCOREMARK_UART_OUTPUT=1"
-  if ($ExtraCFlags -ne "") {
-    $fpgaExtraCFlags = "$ExtraCFlags $fpgaExtraCFlags"
-  }
 
+  Write-Host "BUILD_COREMARK_FPGA_IMAGE=$($Case.Name)"
   $buildOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\build_coremark.ps1") `
     -ToolPrefix $ToolPrefix `
     -OutDir $imageDir `
@@ -38,20 +54,20 @@ function Build-CoreMarkImage {
     -Iterations $Iterations `
     -TotalDataSize $TotalDataSize `
     -CpuHz $CpuHz `
-    -OptLevel $OptLevel `
-    -ExtraCFlags $fpgaExtraCFlags 2>&1
+    -OptLevel $Case.OptLevel `
+    -ExtraCFlags $Case.ExtraCFlags 2>&1
   $buildOutput | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) {
-    throw "CoreMark build failed for $Name"
+    throw "CoreMark build failed for $($Case.Name)"
   }
 
   $objcopyLine = $buildOutput | Where-Object { $_ -match "^OBJCOPY=" } | Select-Object -Last 1
   if (-not $objcopyLine) {
-    throw "Failed to parse objcopy path for $Name"
+    throw "Failed to parse objcopy path for $($Case.Name)"
   }
   $objcopy = ($objcopyLine -replace "^OBJCOPY=", "").Trim()
-
   $elf = Join-Path $imageDir "coremark.elf"
+
   $hexOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\convert_elf_to_hex.ps1") `
     -Elf $elf `
     -Objcopy $objcopy `
@@ -59,51 +75,51 @@ function Build-CoreMarkImage {
     -DMemWordBytes ($XLEN / 8) 2>&1
   $hexOutput | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) {
-    throw "CoreMark hex conversion failed for $Name"
+    throw "CoreMark hex conversion failed for $($Case.Name)"
   }
 
-  $srcImem = Join-Path $imageDir "coremark.imem.hex"
-  $srcDmem = Join-Path $imageDir "coremark.dmem.hex"
-  $dstImem = Join-Path $resolvedOutDir "$Name.imem.hex"
-  $dstDmem = Join-Path $resolvedOutDir "$Name.dmem.hex"
-  Copy-Item -LiteralPath $srcImem -Destination $dstImem -Force
-  Copy-Item -LiteralPath $srcDmem -Destination $dstDmem -Force
-  for ($lane = 0; $lane -lt ($XLEN / 8); $lane++) {
-    Copy-Item -LiteralPath "$srcDmem.b$lane" -Destination "$dstDmem.b$lane" -Force
+  $dstImem = Join-Path $resolvedOutDir "coremark_$($Case.Name).imem.hex"
+  $dstDmem = Join-Path $resolvedOutDir "coremark_$($Case.Name).dmem.hex"
+  Copy-Item -LiteralPath (Join-Path $imageDir "coremark.imem.hex") -Destination $dstImem -Force
+  Copy-Item -LiteralPath (Join-Path $imageDir "coremark.dmem.hex") -Destination $dstDmem -Force
+
+  & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\send_uart_image.ps1") `
+    -ValidateOnly `
+    -DMemWordBytes ($XLEN / 8) `
+    -IMemHex $dstImem `
+    -DMemHex $dstDmem
+  if ($LASTEXITCODE -ne 0) {
+    throw "CoreMark UART image validation failed for $($Case.Name)"
   }
 
   return [pscustomobject]@{
-    name = $Name
+    name = $Case.Name
+    opt = $Case.OptLevel
     iterations = $Iterations
-    xlen = $XLEN
-    opt_level = $OptLevel
-    extra_cflags = $ExtraCFlags
-    imem_hex = $dstImem
-    dmem_hex = $dstDmem
-    elf = $elf
+    total_data_size = $TotalDataSize
+    extra_cflags = $Case.ExtraCFlags
+    imem_hex = Split-Path -Leaf $dstImem
+    dmem_hex = Split-Path -Leaf $dstDmem
   }
 }
 
-$rows = New-Object System.Collections.Generic.List[object]
-$rows.Add((Build-CoreMarkImage -Name "smoke" -Iterations $SmokeIterations))
-$rows.Add((Build-CoreMarkImage -Name "ten_ms" -Iterations $TenMsIterations))
-$rows.Add((Build-CoreMarkImage -Name "ten_sec" -Iterations $TenSecIterations))
+try {
+  $rows = New-Object System.Collections.Generic.List[object]
+  foreach ($case in $cases) {
+    $rows.Add((Build-FinalCoreMarkImage -Case $case))
+  }
 
-$manifest = Join-Path $resolvedOutDir "manifest.csv"
-$rows | Export-Csv -LiteralPath $manifest -NoTypeInformation -Encoding ASCII
+  $manifest = Join-Path $resolvedOutDir "manifest.csv"
+  $rows | Export-Csv -LiteralPath $manifest -NoTypeInformation -Encoding ASCII
 
-$defaultImem = Join-Path $resolvedOutDir "coremark.imem.hex"
-$defaultDmem = Join-Path $resolvedOutDir "coremark.dmem.hex"
-Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.imem.hex") -Destination $defaultImem -Force
-Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex") -Destination $defaultDmem -Force
-for ($lane = 0; $lane -lt ($XLEN / 8); $lane++) {
-  Copy-Item -LiteralPath (Join-Path $resolvedOutDir "smoke.dmem.hex.b$lane") -Destination "$defaultDmem.b$lane" -Force
+  Write-Host "COREMARK_FPGA_OUT=$resolvedOutDir"
+  Write-Host "COREMARK_FPGA_MANIFEST=$manifest"
+  foreach ($row in $rows) {
+    Write-Host "COREMARK_FPGA_$($row.name.ToUpper())_IMEM=$($row.imem_hex)"
+    Write-Host "COREMARK_FPGA_$($row.name.ToUpper())_DMEM=$($row.dmem_hex)"
+  }
+} finally {
+  if (Test-Path -LiteralPath $stagingRoot) {
+    Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+  }
 }
-
-Write-Host "COREMARK_FPGA_OUT=$resolvedOutDir"
-Write-Host "COREMARK_FPGA_MANIFEST=$manifest"
-Write-Host "COREMARK_FPGA_DEFAULT_IMEM=$defaultImem"
-Write-Host "COREMARK_FPGA_DEFAULT_DMEM=$defaultDmem"
-Write-Host "COREMARK_RESULT_PASS_ADDR=0x00017ff0"
-Write-Host "COREMARK_RESULT_FAIL_ADDR=0x00017ff4"
-Write-Host "COREMARK_RESULT_CYCLES_ADDR=0x00017ff8"
