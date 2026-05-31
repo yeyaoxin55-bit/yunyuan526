@@ -566,7 +566,7 @@
   - Do not add `zicntr`, async interrupts, PMP, or debug CSR features yet.
   - Next work should be a timing rescue phase focused on the PC/redirect/hazard control cone exposed by the CSR branch.
 
-## Phase 54 CSR Branch Timing Rescue - In Progress
+## Phase 54 CSR Branch Timing Rescue - Timing Blocked / Checkpoint Committed
 - Goal: recover Huoyue/Zynq-7020 100 MHz timing after the first-stage CSR/trap integration without adding new privileged features.
 - Current blocker:
   - Phase 53 `soc_top` implementation fails timing at WNS `-3.121 ns`, TNS `-4637.885 ns`, with the worst endpoint at `pc_reg`.
@@ -590,3 +590,25 @@
 - Next decision:
   - Stop local payload/gate expression experiments.
   - Either design a larger control-flow resolution boundary with an explicit performance tradeoff, or try a floorplan/implementation strategy that directly clusters the redirect/control cone.
+
+## Phase 55 CSR Redirect Request Boundary - Rejected
+- Goal: test one larger control-flow request boundary instead of continuing local redirect/predictor expression rewrites.
+- Baseline checkpoint:
+  - Phase 54 retained RTL was committed and pushed as `8c0220f Add CSR timing rescue baseline`.
+  - Fresh pre-commit fast acceptance passed: `CSR_PHASE_ACCEPTANCE_PASS=1`, CoreMark 2 `649893` cycles, CPI `1.110978`.
+  - Timing remained blocked before this phase; best measured physical result was still WNS `-1.064 ns` after route-only AdvancedSkew plus second post-route physopt.
+- Planned Phase 55 RTL shape:
+  - EX/control forms a registered `ctrl_redirect_req_*` packet.
+  - The existing redirect/flush stage consumes that request one cycle later.
+  - `redirect_pending_flush` kills younger side effects while a request is pending or a redirect flush is active.
+  - Older MEM/WB retire remains allowed so the redirecting branch/JALR can still retire and write `rd` when architecturally required.
+- Performance budget:
+  - Accept up to about +2% on CoreMark 2 for the experiment, using `663000` cycles as the first screen threshold.
+- Result:
+  - The structural check first failed on Phase 54, then passed after the RTL request-boundary implementation.
+  - Full fast CSR acceptance passed and CoreMark 2 stayed within the screen budget at `657149` cycles.
+  - Full `extra_net_delay` implementation improved over the retained full implementation but still failed timing at WNS `-1.360 ns`.
+  - A second post-route physopt improved only to WNS `-1.336 ns`; route-only AdvancedSkew from the same placement regressed to WNS `-1.616 ns`.
+  - This is worse than the Phase 54 best physical result WNS `-1.064 ns` and has a CoreMark cost, so the RTL and acceptance-hook changes were reverted.
+- Next direction:
+  - Do not retry this exact request-packet shape. It moves the failing endpoint to `ctrl_redirect_req_pc_q`, proving the branch/JALR target computation itself must be split or simplified if another architectural attempt is made.

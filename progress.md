@@ -1419,3 +1419,40 @@
   - This is worse than the retained branch predictor update boundary full implementation (`-1.545 ns`) and the current best physical result (`-1.064 ns`).
   - The predictor payload kill-split candidate was rejected/reverted.
 - Current retained RTL remains the branch predictor update boundary plus earlier accepted CSR timing boundaries. Redirect/predictor payload expression tweaks are now exhausted as timing-rescue candidates.
+
+## 2026-05-31 CSR Branch Session - Phase 55 redirect request boundary
+- User approved the next strategy: freeze the Phase 54 baseline, then test a larger control-flow request boundary with an explicit performance budget.
+- Frozen baseline:
+  - Fresh quick gates passed: `git diff --check`, `scripts/check_project.ps1`, `scripts/check_csr_phase_acceptance.ps1`, `scripts/check_csr_bp_update_boundary.ps1`, `scripts/check_csr_redirect_id_boundary.ps1`, `scripts/check_csr_trap_commit_boundary.ps1`, and `scripts/check_csr_counter_increment_boundary.ps1`.
+  - Fresh full fast CSR acceptance passed: `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`, `CSR_PHASE_ACCEPTANCE_PASS=1`, CoreMark 2 `649893`, CPI `1.110978`.
+  - Committed and pushed `8c0220f Add CSR timing rescue baseline` to `origin/新增CSR`.
+- Phase 55 TDD start:
+  - Added `scripts/check_csr_redirect_request_boundary.ps1`.
+  - First run failed as expected on the retained baseline with `has registered redirect request valid`.
+  - Implemented `ctrl_redirect_req_*` registers in `rtl/cpu_core.v`.
+  - Added `redirect_pending_flush = ctrl_redirect_req_valid_q || redirect_valid`.
+  - Redirect valid/payload/trap commit/MRET commit now consume the request boundary one cycle later.
+  - Pending redirect kill gates were added for DMEM writes, load-response capture, multiplier/divider issue, load-control replay capture, ID side effects, ID early load reads, branch predictor updates, RAS push/pop commits, and frontend fetch/prefetch.
+  - MEM/WB retire is intentionally not killed by `redirect_pending_flush`, so the redirecting branch/JALR can still retire and write `rd` if required.
+- Focused verification after the first implementation:
+  - `scripts/check_csr_redirect_request_boundary.ps1`: pass.
+  - `scripts/check_csr_redirect_id_boundary.ps1`: pass.
+  - `scripts/check_csr_trap_commit_boundary.ps1`: pass.
+  - `scripts/check_csr_bp_update_boundary.ps1`: pass.
+  - `scripts/check_csr_phase_acceptance.ps1`: pass after integrating the new check.
+  - `scripts/check_project.ps1`: pass after adding the new script to required files.
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr`: pass.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32ui -Tests beq,jal,jalr`: pass.
+- Full fast CSR acceptance after the request boundary passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `657149`, CPI `1.123382`.
+  - This is below the `663000` first-screen threshold, so the candidate is worth one Vivado timing run.
+- Vivado result for the request-boundary candidate:
+  - Full `extra_net_delay` implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing at WNS `-1.360 ns`, TNS `-625.709 ns`, setup endpoints `1072`, WHS `0.036 ns`.
+  - Worst path moved to `u_core/ctrl_redirect_req_pc_q_reg[6]/D`, from multiplier/result logic, with data delay `11.935 ns`, route `62.239%`, logic levels `23`.
+  - Route-only AdvancedSkew from the same post-place checkpoint regressed to WNS `-1.616 ns`.
+  - A second post-route `AggressiveExplore` physopt on the full run improved only to WNS `-1.336 ns`, TNS `-617.112 ns`, setup endpoints `1070`.
+- Decision:
+  - Reject and revert the Phase 55 RTL candidate because it does not beat the Phase 54 best physical result WNS `-1.064 ns` and costs CoreMark cycles.
+  - RTL and acceptance script hooks were reverted; only this rejected-experiment record remains.
