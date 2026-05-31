@@ -222,10 +222,11 @@ module csr_unit #(
     wire normal_csr_commit_active = (trap_commit_valid_i !== 1'b1) &&
                                     (mret_commit_valid_i !== 1'b1) &&
                                     csr_commit_do_write;
-    wire csr_commit_mcycle = normal_csr_commit_active &&
+    wire csr_commit_counter_write = csr_commit_do_write;
+    wire csr_commit_mcycle = csr_commit_counter_write &&
                              ((csr_commit_addr_i == `CSR_MCYCLE) ||
                               ((XLEN == 32) && (csr_commit_addr_i == `CSR_MCYCLEH)));
-    wire csr_commit_minstret = normal_csr_commit_active &&
+    wire csr_commit_minstret = csr_commit_counter_write &&
                                ((csr_commit_addr_i == `CSR_MINSTRET) ||
                                 ((XLEN == 32) && (csr_commit_addr_i == `CSR_MINSTRETH)));
 
@@ -255,10 +256,45 @@ module csr_unit #(
             mtval_r <= {XLEN{1'b0}};
             mip_r <= {XLEN{1'b0}};
         end else begin
-            if (!csr_commit_mcycle) begin
+            if (csr_commit_mcycle) begin
+                case (csr_commit_addr_i)
+                    `CSR_MCYCLE: begin
+                        if (XLEN == 32) begin
+                            mcycle_r[31:0] <= csr_commit_next_value[31:0];
+                        end else begin
+                            mcycle_r <= csr_commit_next_value;
+                        end
+                    end
+                    `CSR_MCYCLEH: begin
+                        if (XLEN == 32) begin
+                            mcycle_r[63:32] <= csr_commit_next_value[31:0];
+                        end
+                    end
+                    default: begin
+                    end
+                endcase
+            end else begin
                 mcycle_r <= mcycle_r + 64'h0000000000000001;
             end
-            if ((retire_i === 1'b1) && !csr_commit_minstret) begin
+
+            if (csr_commit_minstret) begin
+                case (csr_commit_addr_i)
+                    `CSR_MINSTRET: begin
+                        if (XLEN == 32) begin
+                            minstret_r[31:0] <= csr_commit_next_value[31:0];
+                        end else begin
+                            minstret_r <= csr_commit_next_value;
+                        end
+                    end
+                    `CSR_MINSTRETH: begin
+                        if (XLEN == 32) begin
+                            minstret_r[63:32] <= csr_commit_next_value[31:0];
+                        end
+                    end
+                    default: begin
+                    end
+                endcase
+            end else if (retire_i === 1'b1) begin
                 minstret_r <= minstret_r + {62'h0000000000000000, retire_count_i};
             end
 
@@ -284,30 +320,6 @@ module csr_unit #(
                     `CSR_MCAUSE: mcause_r <= csr_commit_next_value;
                     `CSR_MTVAL: mtval_r <= csr_commit_next_value;
                     `CSR_MIP: mip_r <= csr_commit_next_value & MIE_MIP_MASK;
-                    `CSR_MCYCLE: begin
-                        if (XLEN == 32) begin
-                            mcycle_r[31:0] <= csr_commit_next_value[31:0];
-                        end else begin
-                            mcycle_r <= csr_commit_next_value;
-                        end
-                    end
-                    `CSR_MINSTRET: begin
-                        if (XLEN == 32) begin
-                            minstret_r[31:0] <= csr_commit_next_value[31:0];
-                        end else begin
-                            minstret_r <= csr_commit_next_value;
-                        end
-                    end
-                    `CSR_MCYCLEH: begin
-                        if (XLEN == 32) begin
-                            mcycle_r[63:32] <= csr_commit_next_value[31:0];
-                        end
-                    end
-                    `CSR_MINSTRETH: begin
-                        if (XLEN == 32) begin
-                            minstret_r[63:32] <= csr_commit_next_value[31:0];
-                        end
-                    end
                     default: begin
                     end
                 endcase

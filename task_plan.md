@@ -565,3 +565,28 @@
 - Decision:
   - Do not add `zicntr`, async interrupts, PMP, or debug CSR features yet.
   - Next work should be a timing rescue phase focused on the PC/redirect/hazard control cone exposed by the CSR branch.
+
+## Phase 54 CSR Branch Timing Rescue - In Progress
+- Goal: recover Huoyue/Zynq-7020 100 MHz timing after the first-stage CSR/trap integration without adding new privileged features.
+- Current blocker:
+  - Phase 53 `soc_top` implementation fails timing at WNS `-3.121 ns`, TNS `-4637.885 ns`, with the worst endpoint at `pc_reg`.
+  - The detailed path starts from `mul_meta_rd_pipe_reg[2][0]` and reaches `pc_reg[2]_rep` through optimized forwarding/ALU/trap/redirect/PC-select logic. Route delay is about `76%` of the path, but the RTL fan-in still needs to be reduced before more CSR work.
+- Working hypothesis:
+  - The precise CSR retire-boundary fix widened CSR-state hazard tracking across ID/EX, EX/MEM, and MEM/WB.
+  - That hazard now feeds broad fetch/PC hold, ID redirect, predictor update, and pipeline accept gates. Even if the Vivado names are hierarchy-rebuilt, the practical region is the PC/redirect/hazard control cone rather than CSR bank arithmetic.
+- Planned approach:
+  - First inspect and narrow nonessential control fan-in around `hazard_stall`, `csr_redirect_detect`, `id_stage_accept`, and the PC update block.
+  - Prefer a small RTL boundary or decode-side state bit over speculative expression rewrites.
+  - Verify any candidate with CSR acceptance simulation before spending a full Vivado implementation run.
+- Acceptance gate:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passes.
+  - `scripts/check_project.ps1` and `git diff --check` pass.
+  - A fresh Huoyue `soc_top` 100 MHz implementation passes QoR and `scripts/check_vivado_timing.ps1` with non-negative WNS.
+- Current evidence:
+  - Functional acceptance is clean after the retained timing boundaries: latest `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`, CoreMark 2 `649893` cycles, CPI `1.110978`.
+  - Best retained RTL boundary is the branch predictor update boundary plus earlier CSR redirect/commit/counter boundaries.
+  - Best measured physical result is route-only `AdvancedSkewModeling + AggressiveExplore` plus a second post-route `AggressiveExplore` physopt from the ExtraNetDelay placement: WNS `-1.064 ns`, TNS `-473.626 ns`, setup failing endpoints `897`, WHS `0.024 ns`.
+  - Timing is still blocked. Rejected RTL candidates include redirect payload capture variants, fallthrough-only/CSR-gate variants, EX/MEM control replay, dedicated CSR redirect payload, and predictor payload kill-split.
+- Next decision:
+  - Stop local payload/gate expression experiments.
+  - Either design a larger control-flow resolution boundary with an explicit performance tradeoff, or try a floorplan/implementation strategy that directly clusters the redirect/control cone.

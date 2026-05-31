@@ -1216,3 +1216,206 @@
 - Current decision:
   - CSR branch is functionally accepted in simulation but not signed off for 100 MHz Huoyue hardware.
   - Next phase should rescue the PC/redirect/hazard control timing before adding `zicntr`, asynchronous interrupts, PMP, or debug trigger CSRs.
+
+## 2026-05-28 CSR Branch Session - Phase 54 timing rescue
+- User approved the next recommended strategy: work on the timing blocker before adding more CSR functionality.
+- Restored planning context and ran planning session catchup; no code changes were present at the start of this resumed phase.
+- Initial diagnosis:
+  - `git status --short --branch` showed `## 新增CSR...origin/新增CSR`.
+  - The Phase 53 timing path is `u_core/mul_meta_rd_pipe_reg[2][0]/C` to `u_core/pc_reg[2]_rep/D`, with data path delay `12.887 ns`, logic `3.049 ns`, route `9.838 ns`.
+  - The path includes optimized/rebuilt names through multiplier forwarding/result, effective-address/trap-value logic, CSR redirect classification, ID prediction target gating, and final PC-select logic.
+  - The RTL fan-in area under review is `hazard_stall`, `csr_redirect_detect`, branch/jump redirect detection, predictor update gating, and the PC update block in `rtl/cpu_core.v`.
+- Current action: inspect whether CSR-state hazard and redirect gates can be narrowed or registered without changing the accepted CSR semantics.
+- Implemented first Phase 54 timing-boundary candidate:
+  - added `scripts/check_csr_redirect_id_boundary.ps1`;
+  - removed `csr_redirect_detect` from the same-cycle ID JAL/JALR PC-select conditions;
+  - kept `csr_redirect_detect` gating on ID side effects through `id_stage_accept`, `bp_jal_update`, and `ras_pop`;
+  - added `sw/csr_trap_tests/trap_kills_id_redirect.S` to prove an older ECALL trap still kills a younger ID-stage JAL redirect.
+- RED/GREEN evidence:
+  - `scripts/check_csr_redirect_id_boundary.ps1` first failed with `id_jal_redirect must not put csr_redirect_detect on the same-cycle PC-select path`.
+  - After the RTL change, the same check passed.
+  - `scripts/run_csr_trap_programs.ps1 -Tests trap_kills_id_redirect` passed at cycle `82`.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 remained `649741` measured cycles, CPI `1.110780`.
+
+## 2026-05-29 CSR Branch Session - Phase 54 timing rescue continuation
+- Continued the CSR timing rescue on branch `新增CSR` after adding the latest trap commit registered boundary.
+- Full fast CSR acceptance after the boundary passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `649731`, CPI `1.110763`.
+- This confirms the ID redirect split, RAS side-effect boundary, counter commit case split, and trap/MRET commit registered boundary preserve the current first-stage CSR functional acceptance before the next Vivado run.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_trap_commit_boundary_100m` completed and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed post-route timing:
+  - `scripts/check_vivado_timing.ps1 -ReportDir build\vivado_impl_soc_top_csr_phase54_trap_commit_boundary_100m`
+  - WNS `-1.987 ns`, TNS `-891.526 ns`, setup failing endpoints `1049`, WHS `0.029 ns`.
+  - Worst path: `u_core/redirect_csr_flush_reg/C` to `u_core/u_branch_predictor/update_pc_q_reg[19]/CE`, data delay `11.677 ns`, route `77.957%`.
+- Added `scripts/check_csr_bp_update_boundary.ps1` and then registered branch predictor updates inside `cpu_core`:
+  - raw update generation remains in core control;
+  - branch predictor now consumes `bp_update_q`, `bp_update_uncond_q`, `bp_update_pc_q`, `bp_update_taken_q`, and `bp_update_target_q`;
+  - raw branch predictor branch updates are killed by registered `flush`.
+- Focused verification after the predictor update boundary passed:
+  - `scripts/check_csr_bp_update_boundary.ps1`
+  - `scripts/check_csr_redirect_id_boundary.ps1`
+  - `scripts/check_csr_phase_acceptance.ps1`
+  - `scripts/check_project.ps1`
+  - `scripts/run_csr_unit_modelsim.ps1`
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_jalr`
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal,scall,sbreak,instret_overflow`
+- Full fast CSR acceptance after the branch predictor update boundary passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `649893`, CPI `1.110978`.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_bp_update_boundary_100m` passed QoR but still failed timing:
+  - WNS `-1.545 ns`, improved from the previous `-1.987 ns`.
+  - Worst path moved to `u_core/ex_mem_rd_reg[3]/C` -> `u_core/redirect_fallthrough_pc_q_reg[13]/CE`.
+- Added `scripts/check_csr_redirect_payload_boundary.ps1` and changed redirect payload registers to load `redirect_pc_q_next`, `redirect_fallthrough_pc_q_next`, and `redirect_taken_q_next` every cycle. `redirect_valid` still determines when the payload is consumed, so this removes the wide inferred CE from payload registers without changing redirect semantics.
+- Focused verification after the redirect payload boundary passed:
+  - `scripts/check_csr_redirect_payload_boundary.ps1`
+  - `scripts/check_csr_bp_update_boundary.ps1`
+  - `scripts/check_csr_phase_acceptance.ps1`
+  - `scripts/check_project.ps1`
+  - `scripts/run_csr_unit_modelsim.ps1`
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jalr`
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal,scall,sbreak,instret_overflow`
+- Full fast CSR acceptance after the redirect payload boundary also passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `649893`, CPI `1.110978`.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_redirect_payload_boundary_100m` passed QoR but regressed timing to WNS `-1.617 ns`. The no-CE redirect payload candidate moved the worst path into `redirect_pc_q` D and was rejected/reverted.
+- Added the narrower `scripts/check_csr_redirect_payload_capture_boundary.ps1` candidate:
+  - `redirect_payload_capture` keeps the normal redirect decision unchanged;
+  - payload capture no longer depends on `ctrl_valid` or `control_load_resp_dep`;
+  - stale payload captures are harmless because `redirect_valid` still controls consumption.
+- Focused verification after the redirect payload capture candidate passed:
+  - `scripts/check_csr_redirect_payload_capture_boundary.ps1`
+  - `scripts/check_csr_bp_update_boundary.ps1`
+  - `scripts/check_csr_phase_acceptance.ps1`
+  - `scripts/check_project.ps1`
+  - `scripts/run_csr_unit_modelsim.ps1`
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr`
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal,scall,sbreak,ma_fetch,ma_addr,instret_overflow`
+- Full fast CSR acceptance after redirect payload capture passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `649893`, CPI `1.110978`.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_redirect_payload_capture_boundary_100m` passed QoR but regressed timing to WNS `-2.045 ns`, with the worst path into `redirect_pc_q` D. The redirect payload capture candidate was rejected/reverted. Current retained timing candidate is back to the branch predictor update boundary, whose best measured WNS is `-1.545 ns`.
+- Added the narrower `scripts/check_csr_redirect_fallthrough_boundary.ps1` candidate:
+  - `redirect_fallthrough_pc_q` now captures `ctrl_pc + 4` every cycle;
+  - CSR redirect and normal redirect candidates still update `redirect_pc_q` and `redirect_taken_q` only at their existing gated boundary;
+  - this targets the measured `redirect_fallthrough_pc_q` CE endpoint without putting the branch/JALR target path onto an unconditional `redirect_pc_q` D path.
+- Focused verification after the redirect fallthrough-only candidate passed:
+  - `scripts/check_csr_redirect_fallthrough_boundary.ps1`
+  - `scripts/check_csr_bp_update_boundary.ps1`
+  - `scripts/check_csr_phase_acceptance.ps1`
+  - `scripts/check_project.ps1`
+  - `scripts/run_csr_unit_modelsim.ps1`
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr`
+  - `scripts/run_riscv_suite.ps1 -Suite rv32mi -Tests illegal,scall,sbreak,ma_fetch,ma_addr,instret_overflow`
+- Full fast CSR acceptance after redirect fallthrough-only passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `649893`, CPI `1.110978`.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_redirect_fallthrough_boundary_100m` generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing:
+  - WNS `-1.914 ns`, TNS `-809.278 ns`, setup failing endpoints `916`, WHS `0.039 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[1]/C` -> `u_core/redirect_pc_q_reg[19]/D`, data delay `11.828 ns`, route `76.226%`, logic levels `16`.
+  - This is worse than the retained branch predictor update boundary result (`-1.545 ns`), so the redirect fallthrough-only candidate was rejected/reverted.
+- Current retained timing candidate remains the branch predictor update boundary at WNS `-1.545 ns`; next action is inspect the remaining redirect-target/CSR-flush path before trying another RTL boundary.
+- Added `scripts/check_csr_control_exmem_replay_boundary.ps1` and the next targeted candidate:
+  - branches whose operands require EX/MEM forwarding and whose branch target is aligned are captured into the existing control replay path;
+  - same-cycle EX branch resolution is blocked for those cases, so the `ex_mem_rd` forwarding-select path no longer has to continue through the branch compare and redirect CE in one cycle;
+  - misaligned branch-target cases are excluded from this replay gate so synchronous instruction-address-misaligned traps still use the existing same-cycle EX trap path.
+- RED/GREEN and focused verification:
+  - the new structural check first failed with `control EX/MEM forwarding dependency has a dedicated replay gate`;
+  - after the RTL change, `scripts/check_csr_control_exmem_replay_boundary.ps1`, `scripts/check_csr_phase_acceptance.ps1`, and `scripts/check_project.ps1` passed;
+  - initial ModelSim compile failed twice because the replay gate referenced `redirect_target_pc` and then `branch_target` before declaration; this was fixed by using `id_ex_branch_target_for_replay = id_ex_pc + id_ex_imm`;
+  - `scripts/run_riscv_suite.ps1 -Suite rv32ui -Tests beq,bne,blt,bltu,bge,bgeu,jal,jalr` passed;
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr` passed.
+- Full fast CSR acceptance after the control EX/MEM replay candidate passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles `653721`, CPI `1.110316`.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_control_exmem_replay_boundary_100m` generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing:
+  - WNS `-1.979 ns`, TNS `-1179.024 ns`, setup failing endpoints `1041`, WHS `0.007 ns`.
+  - Worst path: `u_core/ex_mem_valid_reg/C` -> `u_core/redirect_csr_flush_reg/D`, data delay `11.398 ns`, route `74.136%`, logic levels `16`.
+  - This is worse than the retained branch predictor update boundary result (`-1.545 ns`) and has a CoreMark cost, so the control EX/MEM replay candidate was rejected/reverted.
+- Current retained timing candidate remains the branch predictor update boundary at WNS `-1.545 ns`.
+- Added `scripts/check_csr_redirect_fallthrough_csr_gate.ps1` and the next narrower candidate:
+  - CSR redirect still captures `redirect_pc_q <= csr_redirect_pc` and `redirect_taken_q <= 1'b1`;
+  - `redirect_fallthrough_pc_q` is no longer written by CSR redirect because CSR flushes consume `redirect_pc_q`, not the fallthrough payload;
+  - normal branch/JALR redirect candidates still capture `redirect_fallthrough_pc_q <= redirect_fallthrough_pc` under `redirect_candidate_valid`.
+- RED/GREEN and focused verification:
+  - the new structural check first failed with `redirect fallthrough payload is not written by CSR redirect`;
+  - after the RTL change, `scripts/check_csr_redirect_fallthrough_csr_gate.ps1`, `scripts/check_csr_phase_acceptance.ps1`, and `scripts/check_project.ps1` passed;
+  - `scripts/run_csr_unit_modelsim.ps1` passed;
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr` passed;
+  - `scripts/run_riscv_suite.ps1 -Suite rv32ui -Tests beq,bne,jal,jalr` passed.
+- Full fast CSR acceptance after the redirect fallthrough CSR-gate candidate passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles stayed `649893`, CPI `1.110978`.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_redirect_fallthrough_csr_gate_100m` generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing:
+  - WNS `-2.014 ns`, TNS `-921.897 ns`, setup failing endpoints `1131`, WHS `0.027 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[3]/C` -> `u_core/redirect_pc_q_reg[24]/D`, data delay `11.907 ns`, route `77.257%`, logic levels `15`.
+  - This is worse than the retained branch predictor update boundary result (`-1.545 ns`), so the redirect fallthrough CSR-gate candidate was rejected/reverted.
+- Current retained timing candidate remains the branch predictor update boundary at WNS `-1.545 ns`.
+- Switched from more RTL redirect payload experiments to implementation strategy screening on the retained branch predictor update boundary RTL.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_bp_update_extra_net_delay_100m` used `Place=ExtraNetDelay_high`, `PhysOpt=AggressiveExplore`, `Route=Explore`, and `PostRoutePhysOpt=AggressiveExplore`.
+  - QoR passed (`RAMD64E=0`, `BlockRAM=24`) and a bitstream was generated, but timing still failed.
+  - WNS `-1.482 ns`, TNS `-596.392 ns`, setup failing endpoints `909`, WHS `0.042 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[4]/C` -> `u_core/redirect_pc_q_reg[22]/D`, data delay `11.328 ns`, route `75.344%`, logic levels `16`.
+  - This is the best measured physical result so far, slightly better than the previous retained `AltSpreadLogic_high` WNS `-1.545 ns`, but still not timing-clean.
+- Current action: reuse the ExtraNetDelay post-place checkpoint for a route-only `AdvancedSkewModeling + AggressiveExplore` variant.
+- Route-only `AdvancedSkewModeling + AggressiveExplore` from the ExtraNetDelay post-place checkpoint completed in `build/vivado_route_soc_top_csr_phase54_bp_update_extra_net_delay_adv_skew`.
+  - QoR passed (`RAMD64E=0`, `BlockRAM=24`) and a bitstream was generated, but setup timing still failed.
+  - WNS `-1.204 ns`, TNS `-511.827 ns`, setup failing endpoints `900`, WHS `0.024 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[4]_replica/C` -> `u_core/redirect_fallthrough_pc_q_reg[7]/D`, data delay `11.017 ns`, route `76.455%`, logic levels `14`.
+  - This is the best measured physical result so far, improving over the full ExtraNetDelay implementation WNS `-1.482 ns` and the retained RTL baseline WNS `-1.545 ns`, but it is still not timing-clean.
+- Current action: run one more post-route `phys_opt_design -directive AggressiveExplore` pass from the route-only AdvancedSkew result to test whether placement/route cleanup can recover additional slack before returning to RTL architecture.
+- Second post-route `phys_opt_design -directive AggressiveExplore` from the route-only AdvancedSkew result completed and improved but did not close timing.
+  - QoR remained valid (`RAMD64E=0`, `BlockRAM=24`) and `soc_top_physopt.bit` was generated.
+  - WNS `-1.064 ns`, TNS `-473.626 ns`, setup failing endpoints `897`, WHS `0.024 ns`.
+  - Worst path: `u_core/mul_meta_rd_pipe_reg[2][1]/C` -> `u_core/redirect_fallthrough_pc_q_reg[7]/D`, data delay `10.876 ns`, route `80.912%`, logic levels `11`.
+  - The path still runs through forwarding/multiplier-named optimized logic into redirect/fallthrough payload control, so the remaining gap is not likely to be solved by another route directive alone.
+- Added and TDD-verified `scripts/check_csr_redirect_payload_boundary.ps1` for the next structural boundary.
+  - RED: the check failed because `cpu_core` did not have a dedicated CSR redirect PC payload register.
+  - GREEN: `cpu_core` now has `redirect_csr_pc_q`; `redirect_pc` selects it for `redirect_csr_flush`; CSR redirect no longer writes normal branch/jump payload registers (`redirect_pc_q`, `redirect_fallthrough_pc_q`, `redirect_taken_q`).
+  - The new structural check is integrated into `scripts/check_project.ps1`, `scripts/check_csr_phase_acceptance.ps1`, and `scripts/run_csr_phase_acceptance.ps1`.
+- Focused verification after the dedicated CSR redirect payload boundary passed:
+  - `scripts/check_project.ps1`
+  - `scripts/check_csr_phase_acceptance.ps1`
+  - `scripts/check_csr_redirect_payload_boundary.ps1`
+  - `scripts/check_csr_bp_update_boundary.ps1`
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr`
+  - `scripts/run_csr_unit_modelsim.ps1`
+  - `scripts/run_riscv_suite.ps1 -Suite rv32ui -Tests beq,bne,blt,bltu,bge,bgeu,jal,jalr`
+- Full fast CSR acceptance after the dedicated CSR redirect payload boundary passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles stayed `649893`, CPI `1.110978`.
+- Current action: run a fresh Huoyue `soc_top` 100 MHz implementation for the dedicated CSR redirect payload boundary using the current best physical strategy (`extra_net_delay`).
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_csr_redirect_payload_boundary_extra_net_delay_100m` generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing badly:
+  - WNS `-1.969 ns`, TNS `-858.503 ns`, setup failing endpoints `1005`, WHS `0.070 ns`.
+  - Worst path: `u_core/redirect_jump_flush_reg/C` -> `u_core/bp_update_target_q_reg[11]/D`, data delay `11.851 ns`, route `77.116%`, logic levels `14`.
+  - This is worse than both the retained branch predictor boundary full implementation (`-1.545 ns`) and the current best physical result (`-1.064 ns` after route-only AdvancedSkew plus second post-route physopt).
+  - The dedicated CSR redirect payload boundary was rejected/reverted, including its structural check and acceptance-script hook.
+- Current retained RTL remains the branch predictor update boundary plus earlier accepted CSR timing boundaries. Current best measured physical artifact remains the route-only AdvancedSkew result with second post-route physopt at WNS `-1.064 ns`, still timing-failing.
+- Added a narrower branch predictor update payload boundary:
+  - `bp_update_q` remains the valid/kill gate for predictor side effects.
+  - `bp_update_pc_raw`, `bp_update_taken_raw`, and `bp_update_target_raw` no longer use `bp_branch_update_raw`; they select branch-vs-JAL payload by `ctrl_valid && ctrl_branch` only.
+  - This removes `!flush` and `!csr_redirect_detect` from predictor payload muxes that are ignored whenever `bp_update_q` is false.
+- RED/GREEN structural verification:
+  - `scripts/check_csr_bp_update_boundary.ps1` first failed because predictor payload selection still depended on update kill.
+  - After the RTL change, `scripts/check_project.ps1`, `scripts/check_csr_phase_acceptance.ps1`, `scripts/check_csr_bp_update_boundary.ps1`, and `scripts/check_csr_trap_commit_boundary.ps1` passed.
+- Focused verification after the predictor payload kill-split passed:
+  - `scripts/run_riscv_suite.ps1 -Suite rv32ui -Tests beq,bne,blt,bltu,bge,bgeu,jal,jalr`
+  - `scripts/run_csr_trap_programs.ps1 -Tests ecall_mret,trap_kills_id_redirect,misaligned_branch,misaligned_jal,misaligned_jalr`
+- Full fast CSR acceptance after the predictor payload kill-split passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 measured cycles stayed `649893`, CPI `1.110978`.
+- Current action: run a fresh Huoyue `soc_top` 100 MHz `extra_net_delay` implementation for the predictor payload kill-split candidate.
+- Vivado implementation `build/vivado_impl_soc_top_csr_phase54_bp_payload_kill_split_extra_net_delay_100m` generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing worse than the retained RTL:
+  - WNS `-2.213 ns`, TNS `-951.804 ns`, setup failing endpoints `1298`, WHS `0.033 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[0]/C` -> `u_core/redirect_fallthrough_pc_q_reg[14]/D`, data delay `11.962 ns`, route `75.180%`, logic levels `17`.
+  - This is worse than the retained branch predictor update boundary full implementation (`-1.545 ns`) and the current best physical result (`-1.064 ns`).
+  - The predictor payload kill-split candidate was rejected/reverted.
+- Current retained RTL remains the branch predictor update boundary plus earlier accepted CSR timing boundaries. Redirect/predictor payload expression tweaks are now exhausted as timing-rescue candidates.

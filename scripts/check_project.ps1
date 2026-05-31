@@ -82,6 +82,10 @@ $required = @(
   "scripts/check_id_load_early_opcode_boundary.ps1",
   "scripts/check_redirect_from_replay_boundary.ps1",
   "scripts/check_redirect_jump_mismatch_gate.ps1",
+  "scripts/check_csr_redirect_id_boundary.ps1",
+  "scripts/check_csr_counter_increment_boundary.ps1",
+  "scripts/check_csr_trap_commit_boundary.ps1",
+  "scripts/check_csr_bp_update_boundary.ps1",
   "scripts/check_mul_early_forward_boundary.ps1",
   "scripts/check_divider_operand_boundary.ps1",
   "scripts/check_soc_board_clock.ps1",
@@ -102,6 +106,7 @@ $required = @(
   "sw/csr_trap_tests/misaligned_branch.S",
   "sw/csr_trap_tests/misaligned_jal.S",
   "sw/csr_trap_tests/misaligned_jalr.S",
+  "sw/csr_trap_tests/trap_kills_id_redirect.S",
   "sw/riscv-tests-env/riscv_test.h"
 )
 

@@ -18,12 +18,29 @@ $checks = @(
     Pass = $text -match "check_project\.ps1"
   },
   @{
+    Name = "runs CSR redirect ID timing-boundary check"
+    Pass = $text -match "check_csr_redirect_id_boundary\.ps1"
+  },
+  @{
+    Name = "runs CSR counter increment timing-boundary check"
+    Pass = $text -match "check_csr_counter_increment_boundary\.ps1"
+  },
+  @{
+    Name = "runs CSR trap commit timing-boundary check"
+    Pass = $text -match "check_csr_trap_commit_boundary\.ps1"
+  },
+  @{
+    Name = "runs CSR branch predictor update timing-boundary check"
+    Pass = $text -match "check_csr_bp_update_boundary\.ps1"
+  },
+  @{
     Name = "runs CSR unit regression"
     Pass = $text -match "run_csr_unit_modelsim\.ps1"
   },
   @{
-    Name = "runs local CSR trap programs"
-    Pass = $text -match "run_csr_trap_programs\.ps1"
+    Name = "runs local CSR trap programs including ID redirect kill"
+    Pass = ($text -match "run_csr_trap_programs\.ps1") -and
+           ($text -match "trap_kills_id_redirect")
   },
   @{
     Name = "runs accepted rv32mi suite including instret_overflow"

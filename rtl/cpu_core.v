@@ -139,6 +139,16 @@ module cpu_core #(
     reg redirect_jump_flush;
     reg redirect_csr_flush;
     reg redirect_from_replay;
+    reg csr_trap_commit_q;
+    reg [31:0] csr_trap_mepc_q;
+    reg [31:0] csr_trap_mcause_q;
+    reg [31:0] csr_trap_mtval_q;
+    reg csr_mret_commit_q;
+    reg bp_update_q;
+    reg bp_update_uncond_q;
+    reg [31:0] bp_update_pc_q;
+    reg bp_update_taken_q;
+    reg [31:0] bp_update_target_q;
     reg ctrl_replay_valid;
     reg ctrl_replay_branch;
     reg ctrl_replay_jump;
@@ -167,6 +177,9 @@ module cpu_core #(
     reg ctrl_load_pending_wait_resp;
     reg [31:0] ras_stack [0:7];
     reg [3:0] ras_count;
+    reg ras_push_q;
+    reg ras_pop_q;
+    reg [31:0] ras_push_target_q;
     integer ras_i;
     integer mul_comb_i;
     integer mul_seq_i;
@@ -329,11 +342,11 @@ module cpu_core #(
         .csr_commit_addr_i(mem_wb_csr_addr),
         .csr_commit_wdata_i(mem_wb_csr_wdata),
         .csr_commit_rd_zero_i(mem_wb_csr_rd_zero),
-        .trap_commit_valid_i(trap_redirect_detect),
-        .trap_mepc_i(ex_trap_mepc),
-        .trap_mcause_i(ex_trap_cause),
-        .trap_mtval_i(ex_trap_tval),
-        .mret_commit_valid_i(mret_redirect_detect),
+        .trap_commit_valid_i(csr_trap_commit_q),
+        .trap_mepc_i(csr_trap_mepc_q),
+        .trap_mcause_i(csr_trap_mcause_q),
+        .trap_mtval_i(csr_trap_mtval_q),
+        .mret_commit_valid_i(csr_mret_commit_q),
         .trap_pc_o(csr_trap_pc),
         .mret_pc_o(csr_mret_pc),
         .mcycle_o(csr_mcycle),
@@ -920,7 +933,6 @@ module cpu_core #(
                       (dec_imm == 32'h00000000);
     wire id_jal_redirect = if_id_valid && dec_jump && !dec_jalr &&
                            !id_jal_target_misaligned &&
-                           !csr_redirect_detect &&
                            !pipe_wait &&
                            !hazard_stall &&
                            !control_conflict_stall &&
@@ -931,7 +943,6 @@ module cpu_core #(
                            !flush;
     wire id_jalr_ras_redirect = if_id_valid && dec_return && ras_valid &&
                                 !id_jalr_target_misaligned &&
-                                !csr_redirect_detect &&
                                 !pipe_wait &&
                                 !hazard_stall &&
                                 !control_conflict_stall &&
@@ -953,8 +964,10 @@ module cpu_core #(
                            !ctrl_pending_conflict_stall &&
                            !ctrl_load_pending_valid &&
                            !ctrl_replay_valid;
-    wire ras_push = id_stage_accept && dec_call && !id_jal_target_misaligned;
-    wire ras_pop = id_jalr_ras_redirect;
+    wire ras_push_req = id_stage_accept && dec_call && !id_jal_target_misaligned;
+    wire ras_pop_req = id_stage_accept && dec_return && ras_valid && !id_jalr_target_misaligned;
+    wire ras_push = ras_push_q && !flush;
+    wire ras_pop = ras_pop_q && !flush;
     wire id_load_early_read = (ENABLE_ID_LOAD_EARLY_READ != 0) &&
                               if_id_valid &&
                               if_id_mem_read_q &&
@@ -972,12 +985,18 @@ module cpu_core #(
                                           if_id_rs1_raw_data_q;
     wire [31:0] id_load_early_addr = id_load_early_base_data + if_id_load_imm_q;
 
-    wire bp_branch_update = ctrl_valid && ctrl_branch && !pipe_wait && !csr_redirect_detect;
-    wire bp_jal_update = id_jal_redirect && !bp_branch_update;
-    wire bp_update = bp_branch_update || bp_jal_update;
-    wire [31:0] bp_update_pc = bp_branch_update ? ctrl_pc : if_id_pc;
-    wire bp_update_taken = bp_branch_update ? take_branch : 1'b1;
-    wire [31:0] bp_update_target = bp_branch_update ? branch_target : id_jal_target;
+    wire bp_branch_update_raw = ctrl_valid &&
+                                ctrl_branch &&
+                                !flush &&
+                                !pipe_wait &&
+                                !csr_redirect_detect;
+    wire bp_jal_update_raw = id_jal_redirect &&
+                             !bp_branch_update_raw &&
+                             !csr_redirect_detect;
+    wire bp_update_raw = bp_branch_update_raw || bp_jal_update_raw;
+    wire [31:0] bp_update_pc_raw = bp_branch_update_raw ? ctrl_pc : if_id_pc;
+    wire bp_update_taken_raw = bp_branch_update_raw ? take_branch : 1'b1;
+    wire [31:0] bp_update_target_raw = bp_branch_update_raw ? branch_target : id_jal_target;
 
     branch_predictor #(
         .BHT_DEPTH(BP_BHT_DEPTH),
@@ -992,11 +1011,11 @@ module cpu_core #(
         .pc_i(pc),
         .predict_taken_o(predict_taken),
         .predict_target_o(predict_target),
-        .update_i(bp_update),
-        .update_uncond_i(bp_jal_update),
-        .update_pc_i(bp_update_pc),
-        .actual_taken_i(bp_update_taken),
-        .actual_target_i(bp_update_target)
+        .update_i(bp_update_q),
+        .update_uncond_i(bp_update_uncond_q),
+        .update_pc_i(bp_update_pc_q),
+        .actual_taken_i(bp_update_taken_q),
+        .actual_target_i(bp_update_target_q)
     );
 
     prefetch #(.DEPTH(4)) u_prefetch (
@@ -1163,6 +1182,16 @@ module cpu_core #(
             redirect_jump_flush <= 1'b0;
             redirect_csr_flush <= 1'b0;
             redirect_from_replay <= 1'b0;
+            csr_trap_commit_q <= 1'b0;
+            csr_trap_mepc_q <= 32'h00000000;
+            csr_trap_mcause_q <= 32'h00000000;
+            csr_trap_mtval_q <= 32'h00000000;
+            csr_mret_commit_q <= 1'b0;
+            bp_update_q <= 1'b0;
+            bp_update_uncond_q <= 1'b0;
+            bp_update_pc_q <= 32'h00000000;
+            bp_update_taken_q <= 1'b0;
+            bp_update_target_q <= 32'h00000000;
             ctrl_replay_valid <= 1'b0;
             ctrl_replay_branch <= 1'b0;
             ctrl_replay_jump <= 1'b0;
@@ -1190,20 +1219,33 @@ module cpu_core #(
             ctrl_load_pending_load_rd <= 5'd0;
             ctrl_load_pending_wait_resp <= 1'b0;
             ras_count <= 4'd0;
+            ras_push_q <= 1'b0;
+            ras_pop_q <= 1'b0;
+            ras_push_target_q <= 32'h00000000;
             for (ras_i = 0; ras_i < 8; ras_i = ras_i + 1) begin
                 ras_stack[ras_i] <= 32'h00000000;
             end
         end else begin
             if_id_load_base_mul_pending_dep_q <= if_id_rs1_mul_pending_dep;
 
+            if (flush) begin
+                ras_push_q <= 1'b0;
+                ras_pop_q <= 1'b0;
+                ras_push_target_q <= 32'h00000000;
+            end else begin
+                ras_push_q <= ras_push_req;
+                ras_pop_q <= ras_pop_req;
+                ras_push_target_q <= if_id_pc + 32'd4;
+            end
+
             if (ras_pop) begin
                 ras_count <= ras_count - 4'd1;
             end else if (ras_push) begin
                 if (ras_count != 4'd8) begin
-                    ras_stack[ras_count[2:0]] <= if_id_pc + 32'd4;
+                    ras_stack[ras_count[2:0]] <= ras_push_target_q;
                     ras_count <= ras_count + 4'd1;
                 end else begin
-                    ras_stack[3'd7] <= if_id_pc + 32'd4;
+                    ras_stack[3'd7] <= ras_push_target_q;
                 end
             end
 
@@ -1320,6 +1362,16 @@ module cpu_core #(
             redirect_jump_flush <= redirect_detect && jump_needs_flush_detect;
             redirect_csr_flush <= redirect_detect && csr_redirect_detect;
             redirect_from_replay <= !csr_redirect_detect && ctrl_replay_valid && !pipe_wait;
+            csr_trap_commit_q <= trap_redirect_detect;
+            csr_trap_mepc_q <= ex_trap_mepc;
+            csr_trap_mcause_q <= ex_trap_cause;
+            csr_trap_mtval_q <= ex_trap_tval;
+            csr_mret_commit_q <= mret_redirect_detect;
+            bp_update_q <= bp_update_raw;
+            bp_update_uncond_q <= bp_jal_update_raw;
+            bp_update_pc_q <= bp_update_pc_raw;
+            bp_update_taken_q <= bp_update_taken_raw;
+            bp_update_target_q <= bp_update_target_raw;
 
             load_resp_valid <= !replay_flush && ex_mem_valid && ex_mem_mem_read;
             load_resp_rd <= ex_mem_rd;

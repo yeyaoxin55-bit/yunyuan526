@@ -1,7 +1,7 @@
 param(
   [switch]$SkipVivado,
   [string]$VivadoPath = "",
-  [string]$VivadoOutDir = "build/vivado_impl_soc_top_csr_phase53_100m",
+  [string]$VivadoOutDir = "build/vivado_impl_soc_top_csr_phase54_id_boundary_100m",
   [ValidateSet("default", "explore", "alt_spread", "extra_net_delay")]
   [string]$VivadoStrategy = "alt_spread",
   [int]$Jobs = 4
@@ -63,7 +63,8 @@ $csrTrapTests = @(
   "misaligned_load",
   "misaligned_branch",
   "misaligned_jal",
-  "misaligned_jalr"
+  "misaligned_jalr",
+  "trap_kills_id_redirect"
 )
 
 $rv32miTests = @(
@@ -87,6 +88,22 @@ $rv32umSmoke = @("mul", "div")
 
 Invoke-AcceptanceStep -Name "project structure" -Body {
   & (Join-Path $repoRoot "scripts\check_project.ps1")
+}
+
+Invoke-AcceptanceStep -Name "CSR redirect ID timing boundary" -Body {
+  & (Join-Path $repoRoot "scripts\check_csr_redirect_id_boundary.ps1")
+}
+
+Invoke-AcceptanceStep -Name "CSR counter increment timing boundary" -Body {
+  & (Join-Path $repoRoot "scripts\check_csr_counter_increment_boundary.ps1")
+}
+
+Invoke-AcceptanceStep -Name "CSR trap commit timing boundary" -Body {
+  & (Join-Path $repoRoot "scripts\check_csr_trap_commit_boundary.ps1")
+}
+
+Invoke-AcceptanceStep -Name "CSR branch predictor update timing boundary" -Body {
+  & (Join-Path $repoRoot "scripts\check_csr_bp_update_boundary.ps1")
 }
 
 Invoke-AcceptanceStep -Name "CSR unit ModelSim regression" -Body {
