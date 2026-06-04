@@ -14,6 +14,7 @@ $required = @(
   "rtl/prefetch.v",
   "rtl/branch_predictor.v",
   "rtl/multiplier.v",
+  "rtl/m_unit.v",
   "rtl/uart.v",
   "rtl/divider.v",
   "rtl/csr_unit.v",
@@ -30,6 +31,8 @@ $required = @(
   "tb/tb_load_mul_forward_boundary.v",
   "tb/tb_load_mul_slow_one_stall.v",
   "tb/tb_multiplier_back_to_back.v",
+  "tb/tb_m_unit_multiplier.v",
+  "tb/tb_m_unit_pipeline.v",
   "tb/tb_mul_pipeline_back_to_back.v",
   "tb/tb_mul_result_forward_early.v",
   "tb/tb_ras_return.v",
@@ -87,6 +90,7 @@ $required = @(
   "scripts/check_csr_trap_commit_boundary.ps1",
   "scripts/check_csr_bp_update_boundary.ps1",
   "scripts/check_mul_early_forward_boundary.ps1",
+  "scripts/check_industrial_m_unit_boundary.ps1",
   "scripts/check_divider_operand_boundary.ps1",
   "scripts/check_soc_board_clock.ps1",
   "scripts/check_soc_reset_start_flow.ps1",
@@ -120,5 +124,7 @@ foreach ($path in $required) {
 if ($missing.Count -gt 0) {
   Write-Error ("Missing required files:`n" + ($missing -join "`n"))
 }
+
+& scripts/check_industrial_m_unit_boundary.ps1
 
 Write-Host "Project structure OK"

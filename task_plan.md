@@ -612,3 +612,72 @@
   - This is worse than the Phase 54 best physical result WNS `-1.064 ns` and has a CoreMark cost, so the RTL and acceptance-hook changes were reverted.
 - Next direction:
   - Do not retry this exact request-packet shape. It moves the failing endpoint to `ctrl_redirect_req_pc_q`, proving the branch/JALR target computation itself must be split or simplified if another architectural attempt is made.
+
+## Phase 56 CSR Target Precompute / Redirect No-CE Trials - Rejected
+- Goal: test a more aggressive redirect timing split after Phase 55 showed that a simple request packet still captured too much target computation in one cycle.
+- Trial A: precompute branch/JAL target and fallthrough in ID/EX and carry them through replay/load-pending paths.
+  - Functional result: focused CSR trap tests, rv32ui branch/JAL/JALR, and full fast CSR acceptance passed.
+  - Performance result: CoreMark 2 stayed `649893` cycles, CPI `1.110978`.
+  - Timing result: full `extra_net_delay` implementation failed at WNS `-2.404 ns`, TNS `-956.906 ns`, setup endpoints `1151`.
+  - Decision: rejected and reverted.
+- Trial B: combine target/fallthrough precompute with no-CE normal redirect payload loading.
+  - Functional result: focused CSR trap tests, rv32ui branch/JAL/JALR, and full fast CSR acceptance passed.
+  - Performance result: CoreMark 2 stayed `649893` cycles, CPI `1.110978`.
+  - Timing result: full `extra_net_delay` implementation failed at WNS `-1.831 ns`, TNS `-542.941 ns`, setup endpoints `918`.
+  - Decision: rejected and reverted.
+- Current retained RTL remains the Phase 54/55 clean baseline. Next direction should not retry target precompute or redirect payload no-CE shapes; use either a true later resolve/commit policy or a physical/floorplan strategy around the retained RTL.
+
+## Phase 57 CSR Redirect Floorplan Trial - Rejected
+- Goal: test whether the retained Phase 54 RTL can recover timing through placement clustering before spending more RTL risk on redirect policy changes.
+- Trial:
+  - Added a temporary structural check for `constraints/floorplan_soc_top_csr_redirect_cluster.tcl`; the first RED run failed because the floorplan Tcl did not exist.
+  - Added a temporary soft pblock that excluded DMEM and collected multiplier metadata, EX/MEM control, load/forwarding, redirect payload, redirect valid, and branch predictor update cells under `u_core`.
+  - The pblock applied successfully in Vivado: `SLICE_X6Y0:SLICE_X85Y149`, `DSP48_X0Y0:DSP48_X4Y59`, `926` collected cells.
+- Result:
+  - Full `extra_net_delay` implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing at WNS `-1.802 ns`, TNS `-807.888 ns`, setup endpoints `1088`, WHS `0.081 ns`.
+  - A second post-route `AggressiveExplore` physopt made no improvement: WNS stayed `-1.802 ns`.
+  - Worst path moved to `u_core/id_ex_rs2_reg[2]/C` -> `u_core/redirect_pc_q_reg[10]/CE`, data delay `11.459 ns`, route `74.815%`, logic levels `15`.
+- Decision:
+  - Reject and remove the temporary floorplan/check files. The result is worse than both the retained full implementation WNS `-1.482 ns` and the current best physical artifact WNS `-1.064 ns`.
+  - Do not continue medium/broad redirect-control pblock tuning. The next useful attempt should be a real architectural latency boundary, or a separate multiplier/DSP pipelining experiment if performance impact is acceptable.
+
+## Phase 58 CSR Late Redirect Commit Boundary - Rejected
+- Goal: test a true redirect commit latency boundary after local payload rewrites and medium/broad floorplanning failed.
+- Planned strategy:
+  - EX/control captures trap/MRET/branch/JAL/JALR redirect events into a registered `redirect_commit_*` packet.
+  - The following cycle consumes the packet to drive `redirect_valid`, redirect PC, flush, and CSR trap/MRET commit requests.
+  - `redirect_commit_pending || redirect_valid` kills younger side effects while a redirect packet is pending or being consumed.
+  - Accept an intentional branch/JAL/JALR penalty if CoreMark 2 stays within the first screen budget of `682500` cycles.
+- Acceptance threshold:
+  - Functional checks must pass before any Vivado run.
+  - A timing candidate must beat the current best physical WNS `-1.064 ns` before it is worth retaining or further route/physopt exploration.
+- Result:
+  - RED structural check failed on the retained baseline because `redirect_commit_valid_q` was missing.
+  - GREEN RTL added a registered `redirect_commit_*` packet and `redirect_commit_pending || redirect_valid` younger-kill policy.
+  - Focused CSR trap/control-flow tests passed, and rv32ui branch/JAL/JALR tests passed.
+  - Full fast CSR acceptance passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 result cycles were `657149`, within the `682500` screen budget.
+  - Full `extra_net_delay` Vivado implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing badly at WNS `-3.464 ns`, TNS `-4433.798 ns`, setup endpoints `1997`, WHS `0.026 ns`.
+  - Worst path moved to a frontend clear/reset endpoint: `u_core/ex_mem_rd_reg[0]/C` -> `u_core/u_prefetch/skid_instr_reg[24]/R`, data delay `12.958 ns`, route `75.205%`, logic levels `18`.
+- Decision:
+  - Reject and revert the RTL/check-script candidate because it is far worse than the current best physical WNS `-1.064 ns`.
+  - Do not retry this broad pending-flush late redirect shape. The next timing direction should avoid adding a global frontend clear/reset cone; prefer a narrower target such as DSP multiplier pipelining or a localized prefetch flush-register boundary before another redirect-policy rewrite.
+
+## Phase 59 Industrial M-Unit / DSP Multiplier Pipeline - Phase59A Kept / Phase59B Rejected
+- Goal: move from the fixed-latency `mul_meta_*` multiplier coupling toward an industrial request/response M-unit with a DSP-friendly unified multiplier pipeline.
+- Design spec: `docs/superpowers/specs/2026-06-04-industrial-m-unit-design.md`.
+- Implementation plan: `docs/superpowers/plans/2026-06-04-industrial-m-unit.md`.
+- First slice: add standalone `rtl/m_unit.v`, structural RED/GREEN guard, and RV32/RV64 multiplier pipeline tests before changing `cpu_core`.
+- First slice status: standalone `rtl/m_unit.v`, `scripts/check_industrial_m_unit_boundary.ps1`, `tb/tb_m_unit_multiplier.v`, and `tb/tb_m_unit_pipeline.v` are implemented and verified. The retained M-unit is XLEN-parameterized, uses one signed extended product expression, has response backpressure, stale-epoch response kill, and a two-stage full-product pipeline before result selection.
+- Phase59B trial: `cpu_core` was temporarily converted from fixed `mul_meta_*` tracking to M-unit request/response plus a pending-destination scoreboard.
+- Phase59B functional/performance screen:
+  - Full `rv32um` passed with `FAST_MUL=0 / MUL_STAGES=1`.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed.
+  - CoreMark 2 passed the budget both before and after the second product stage: `656805` cycles first, then `664509` cycles with the two-stage full-product pipe, below the `682500` screen.
+- Phase59B timing result:
+  - First M-unit CPU integration full implementation failed at WNS `-1.447 ns`.
+  - Two-stage full-product pipeline improved full implementation to WNS `-1.276 ns`, QoR OK (`RAMD64E=0`, `BlockRAM=24`), but still did not beat the retained best physical WNS `-1.064 ns`.
+  - Route-only `AdvancedSkewModeling + AggressiveExplore` from the same placement regressed to WNS `-1.746 ns`.
+  - A second post-route `AggressiveExplore` physopt on the full-route result made no improvement; WNS stayed `-1.276 ns`.
+- Decision: reject and revert Phase59B CPU integration. Keep Phase59A standalone M-unit and tests as the reusable foundation. Do not land the timing-worse `cpu_core` M-unit scoreboard integration until the next architecture cut also addresses the redirect/forwarding control cone or uses explicit DSP primitives.
+- Post-revert verification: fresh `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 returned to the retained baseline result `649893` cycles, CPI `1.110978`, with `COREMARK_MUL_WAIT_STALLS=0`.
+- Next direction: either instantiate a Xilinx-specific DSP multiplier macro/primitive behind the M-unit interface, or design a narrower CPU integration boundary that does not put M-result scoreboard/forwarding state into the existing redirect/fallthrough critical cone.

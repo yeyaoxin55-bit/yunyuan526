@@ -1456,3 +1456,145 @@
 - Decision:
   - Reject and revert the Phase 55 RTL candidate because it does not beat the Phase 54 best physical result WNS `-1.064 ns` and costs CoreMark cycles.
   - RTL and acceptance script hooks were reverted; only this rejected-experiment record remains.
+
+## 2026-06-03 CSR Branch Session - Phase 56 target precompute / no-CE trials
+- User approved a more aggressive timing strategy after Phase 55 was rejected.
+- Trial A implemented ID/EX precomputed branch/JAL target and fallthrough registers, with replay/load-pending carrying the same payload.
+  - RED structural check failed on the retained baseline as expected.
+  - GREEN structural check passed after the RTL change.
+  - Focused CSR trap programs passed: `ecall_mret`, `trap_kills_id_redirect`, `misaligned_branch`, `misaligned_jal`, `misaligned_jalr`.
+  - rv32ui control-flow subset passed: `beq,bne,blt,bltu,bge,bgeu,jal,jalr`.
+  - Full fast CSR acceptance passed with `CSR_PHASE_ACCEPTANCE_PASS=1`, CoreMark 2 `649893`, CPI `1.110978`.
+  - Vivado `extra_net_delay` implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing at WNS `-2.404 ns`, TNS `-956.906 ns`, setup endpoints `1151`.
+  - Trial A was rejected and fully reverted.
+- Trial B combined the same target/fallthrough precompute with no-CE normal redirect payload writes.
+  - RED/GREEN structural check passed for the combined shape.
+  - Focused CSR trap programs passed: `ecall_mret`, `trap_kills_id_redirect`, `misaligned_branch`, `misaligned_jal`, `misaligned_jalr`.
+  - rv32ui control-flow subset passed: `beq,bne,blt,bltu,bge,bgeu,jal,jalr`.
+  - Full fast CSR acceptance passed with `CSR_PHASE_ACCEPTANCE_PASS=1`, CoreMark 2 `649893`, CPI `1.110978`.
+  - Vivado `extra_net_delay` implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing at WNS `-1.831 ns`, TNS `-542.941 ns`, setup endpoints `918`.
+  - Trial B was rejected and fully reverted.
+- Current retained RTL is again the Phase 54/55 clean baseline. Fresh `git diff --check`, `scripts/check_project.ps1`, and `scripts/check_csr_phase_acceptance.ps1` passed after the reverts, and `git status --short` is clean before recording this progress update.
+
+## 2026-06-03 CSR Branch Session - Phase 57 redirect floorplan trial
+- User approved trying the physical/floorplan route on the retained RTL before another RTL redirect rewrite.
+- Added a temporary `scripts/check_csr_redirect_floorplan.ps1` and confirmed the RED state first: it failed because `constraints/floorplan_soc_top_csr_redirect_cluster.tcl` did not exist.
+- Added a temporary soft pblock candidate that:
+  - excluded `u_dmem`;
+  - collected multiplier metadata, EX/MEM control, load/forwarding, redirect, and branch-predictor update cells under `u_core`;
+  - applied ranges `SLICE_X6Y0:SLICE_X85Y149` and `DSP48_X0Y0:DSP48_X4Y59`.
+- GREEN structural check passed, then Vivado reported the pblock applied to `926` cells.
+- Full implementation command:
+  - `scripts/run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build\vivado_impl_soc_top_csr_phase57_redirect_floorplan_extra_net_delay_100m -Jobs 4 -FloorplanTcl constraints\floorplan_soc_top_csr_redirect_cluster.tcl -PlaceDirective ExtraNetDelay_high -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore`
+- Full implementation generated a bitstream and passed QoR:
+  - `QoR OK: TOP=soc_top RAMD64E=0 BlockRAM=24`
+  - Timing failed: WNS `-1.802 ns`, TNS `-807.888 ns`, setup endpoints `1088`, WHS `0.081 ns`.
+  - Worst path: `u_core/id_ex_rs2_reg[2]/C` -> `u_core/redirect_pc_q_reg[10]/CE`, data delay `11.459 ns`, route `74.815%`, logic levels `15`.
+- A second post-route `AggressiveExplore` physopt from the same routed DCP made no improvement:
+  - WNS stayed `-1.802 ns`, TNS stayed `-807.888 ns`.
+  - Vivado warned that post-route physopt is unlikely to help when WNS magnitude is this large.
+- Decision: reject and remove the temporary floorplan/check files. This is worse than the retained full implementation WNS `-1.482 ns` and the current best physical artifact WNS `-1.064 ns`.
+
+## 2026-06-04 CSR Branch Session - Phase 58 late redirect commit trial
+- User approved executing the recommended late redirect/commit strategy.
+- Added implementation plan `docs/superpowers/plans/2026-06-04-csr-late-redirect-commit.md`.
+- Added temporary `scripts/check_csr_late_redirect_commit_boundary.ps1`.
+  - RED run failed as expected on the retained baseline: missing `redirect_commit_valid_q`.
+- Implemented a temporary RTL candidate in `rtl/cpu_core.v`:
+  - added registered `redirect_commit_*` packet state;
+  - made `redirect_valid`, redirect payload, trap commit, and MRET commit consume the registered packet one cycle later;
+  - added `redirect_commit_pending` gates to younger frontend/pipeline side effects.
+- GREEN structural and focused checks passed:
+  - `scripts/check_csr_late_redirect_commit_boundary.ps1`
+  - `scripts/check_project.ps1`
+  - `scripts/check_csr_trap_commit_boundary.ps1`
+  - `scripts/check_csr_redirect_id_boundary.ps1`
+  - `scripts/check_csr_bp_update_boundary.ps1`
+  - focused CSR trap programs: `ecall_mret`, `trap_kills_id_redirect`, `misaligned_branch`, `misaligned_jal`, `misaligned_jalr`
+  - rv32ui control-flow subset: `beq,bne,blt,bltu,bge,bgeu,jal,jalr`
+- Full fast CSR acceptance passed:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - `CSR_PHASE_ACCEPTANCE_PASS=1`
+  - CoreMark 2 result cycles `657149`, CPI `1.138182`, within the Phase 58 screen budget `682500`.
+- Vivado result for the late redirect commit candidate:
+  - Command: `scripts/run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build\vivado_impl_soc_top_csr_phase58_late_redirect_commit_extra_net_delay_100m -Jobs 4 -PlaceDirective ExtraNetDelay_high -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore`
+  - Bitstream generated and QoR passed: `RAMD64E=0`, `BlockRAM=24`.
+  - Timing failed badly: WNS `-3.464 ns`, TNS `-4433.798 ns`, setup endpoints `1997`, WHS `0.026 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[0]/C` -> `u_core/u_prefetch/skid_instr_reg[24]/R`, data delay `12.958 ns`, route `75.205%`, logic levels `18`.
+- Decision:
+  - Reject the Phase 58 RTL candidate because it is far worse than the current best physical WNS `-1.064 ns`.
+  - Reverted `rtl/cpu_core.v` to the retained RTL and removed the temporary late-redirect structural check.
+  - Keep the implementation plan and this experiment record. Do not continue with this broad global pending-flush shape.
+
+## 2026-06-04 CSR Branch Session - Phase 59 industrial M-unit start
+- User approved the industrial DSP multiplier pipeline strategy.
+- Restored planning context and confirmed the retained RTL is still the Phase 54/55 baseline after the rejected Phase 58 candidate.
+- Rechecked multiplier-related code:
+  - `cpu_core` still uses fixed-latency `mul_meta_*` pipes and a separate `mul_fifo`.
+  - `multiplier.v` still computes three parallel products.
+  - board-facing tops still use the FPGA-like `FAST_MUL=0`, `MUL_STAGES=1` path for Huoyue/CoreMark runs.
+- Added Phase 59 design spec: `docs/superpowers/specs/2026-06-04-industrial-m-unit-design.md`.
+- Added Phase 59 implementation plan: `docs/superpowers/plans/2026-06-04-industrial-m-unit.md`.
+- Added `scripts/check_industrial_m_unit_boundary.ps1`.
+  - RED run failed as expected on the retained baseline: `Missing required file: rtl/m_unit.v`.
+  - Fixed a check-script regex quoting bug caused by PowerShell expanding `$signed` in a double-quoted string.
+- Added standalone M-unit tests:
+  - `tb/tb_m_unit_multiplier.v` for RV32/RV64 directed `MUL/MULH/MULHSU/MULHU`.
+  - `tb/tb_m_unit_pipeline.v` for back-to-back issue, response backpressure, stale epoch drop, `rd=x0`, and same-rd ordered responses.
+  - Initial behavior failure traced to testbench request timing; `req_valid` did not always span a posedge. The issue tasks now align to `negedge clk` before asserting request valid.
+- Added `rtl/m_unit.v` with a request/response interface, XLEN/EPOCH parameters, a single signed `lhs_ext * rhs_ext` product path, response backpressure, and stale-epoch kill.
+- Integrated new files into `scripts/run_modelsim.ps1` and `scripts/check_project.ps1`.
+- Focused and structural checks passed:
+  - `scripts/check_industrial_m_unit_boundary.ps1`
+  - `scripts/check_project.ps1`
+  - `git diff --check`
+  - `tb_m_unit_multiplier`
+  - `tb_m_unit_pipeline`
+- A 300-second full `scripts/run_modelsim.ps1` run timed out due total wall time, not a failing test. The run compiled cleanly and reached/passed the new M-unit tests and old multiply tests before timeout; remaining tail tests were run individually and passed.
+- Fresh full single-process `scripts/run_modelsim.ps1` with a 600-second timeout passed:
+  - compile completed with `Errors: 0, Warnings: 0`;
+  - all listed testbenches ran through `tb_soc_uart_loader`;
+  - each simulation ended with `Errors: 0, Warnings: 0`.
+- Phase 59A standalone M-unit is accepted for now. Next action is Phase 59B RED: add a CPU integration boundary check that fails while `cpu_core` still uses `mul_meta_*` fixed-latency tracking.
+
+## 2026-06-04 CSR Branch Session - Phase 59B M-unit CPU integration trial
+- Added a temporary CPU integration structural check and converted `cpu_core` from fixed `mul_meta_*` tracking to an M-unit request/response path with pending destination scoreboard state.
+- Added `rtl/m_unit.v` to the external ModelSim and Vivado source lists after the first external `rv32um` run failed to load the design because `m_unit` was not compiled.
+- Functional and performance screens for the temporary CPU integration:
+  - `scripts/check_cpu_m_unit_integration_boundary.ps1` passed during the trial.
+  - Full single-process `scripts/run_modelsim.ps1` passed.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32um -FastMul 0 -MulStages 1` passed all `rv32um` tests.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - CoreMark 2 with `FAST_MUL=0 / MUL_STAGES=1` initially measured `656805` cycles.
+- Vivado found the first M-unit CPU integration timing candidate still failed the Phase59B physical screen:
+  - full `ExtraNetDelay_high/AggressiveExplore/Explore/AggressiveExplore` implementation WNS `-1.447 ns`;
+  - QoR passed (`RAMD64E=0`, `BlockRAM=24`);
+  - this was better than the retained full implementation WNS `-1.482 ns`, but worse than the retained best physical artifact WNS `-1.064 ns`.
+- Strengthened the M-unit DSP pipeline structure:
+  - first RED structural check failed because there was no full-width `product_pipe`;
+  - added `product_pipe[1] <= product`;
+  - second RED structural check required `product_pipe[2] <= product_pipe[1]` and result selection from `product_pipe[2]`;
+  - updated `m_unit` to use a minimum 4-stage internal pipeline: operand, product stage 1, product stage 2, registered result.
+- Focused verification after the two-stage product pipe:
+  - `scripts/check_industrial_m_unit_boundary.ps1` passed.
+  - Standalone `tb_m_unit_multiplier` and `tb_m_unit_pipeline` passed in an isolated ModelSim work library with 0 errors and 0 warnings.
+  - CoreMark 2 with `FAST_MUL=0 / MUL_STAGES=1` measured `664509` cycles, still below the `682500` screen.
+  - The multiply scoreboard micro-test now naturally observes 4 source stalls, but that CPU integration test update was reverted with the rejected Phase59B RTL.
+- Physical timing after the two-stage product pipe:
+  - `soc_top` synthesis still reported partial DSP MREG/PREG warnings for the inferred 33x33 cascade.
+  - Full implementation improved to WNS `-1.276 ns`, QoR OK (`RAMD64E=0`, `BlockRAM=24`), but still did not beat `-1.064 ns`.
+  - Route-only `AdvancedSkewModeling + AggressiveExplore` from the same placement regressed to WNS `-1.746 ns`.
+  - A second post-route `AggressiveExplore` physopt made no improvement; WNS stayed `-1.276 ns`.
+- Decision:
+  - Rejected Phase59B CPU integration and reverted `rtl/cpu_core.v`, `tb/tb_mul_result_forward_early.v`, `scripts/check_mul_early_forward_boundary.ps1`, and the CPU integration structural check hook.
+  - Kept Phase59A standalone `m_unit`, M-unit tests, source-list integration, and the strengthened industrial M-unit structural check.
+  - Next useful attempt should not retry the same CPU scoreboard wiring. It needs either explicit DSP48/macro implementation inside the M-unit or a CPU-side boundary that isolates M scoreboard/forwarding state from the existing redirect/fallthrough timing cone.
+
+## 2026-06-04 CSR Branch Session - Phase 59A retained verification after Phase59B revert
+- Ran fresh CSR phase acceptance after reverting Phase59B CPU integration:
+  - Command: `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`
+  - Result: `CSR_PHASE_ACCEPTANCE_PASS=1`, `CSR_PHASE_VIVADO_SKIPPED=1`.
+  - CoreMark 2 smoke result: `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.
+- Checked working tree after revert:
+  - `rtl/cpu_core.v`, `tb/tb_mul_result_forward_early.v`, and `scripts/check_mul_early_forward_boundary.ps1` are no longer modified.
+  - Retained changes are the standalone `rtl/m_unit.v`, M-unit tests, source-list additions, structural M-unit check, and planning records.

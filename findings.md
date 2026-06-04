@@ -626,3 +626,53 @@
 - The first focused simulation results show the pending-kill shape is plausible: CSR trap/MRET tests, misaligned control-flow trap tests, and basic branch/JAL/JALR official tests pass after the RTL change. Full CSR acceptance and Vivado timing are still required before accepting or rejecting the candidate.
 - Final result: reject this exact request-boundary shape. It is functionally clean and within the short CoreMark screen, but post-route timing remains worse than the Phase 54 best physical artifact. The endpoint moved to `ctrl_redirect_req_pc_q`, so the request packet still captures too much branch/JALR target computation in one cycle.
 - Next architectural timing attempt should not simply add another valid/payload request register. It must split target computation itself, for example by precomputing/carrying branch target and JALR base earlier, or by isolating trap/CSR target capture from normal branch/JALR target-data capture with a different latency policy.
+
+## 2026-06-03 CSR Phase 56 Control Target Precompute Findings
+- Two more aggressive redirect/target timing candidates were tested and rejected. Both preserved simulation behavior and CoreMark 2 cycles, but neither improved Huoyue 100 MHz timing.
+- Candidate A: precompute branch/JAL target and fallthrough in ID/EX, carry them through control replay/load-pending paths, and keep the existing `redirect_candidate_valid` payload capture enable.
+  - RED/GREEN structural check proved the old RTL still computed `branch_target = ctrl_pc + ctrl_imm` and `redirect_fallthrough_pc = ctrl_pc + 4`, then the candidate replaced those with registered precomputed values.
+  - Focused CSR trap/control-flow regressions passed, rv32ui branch/JAL/JALR passed, and full `run_csr_phase_acceptance.ps1 -SkipVivado` passed.
+  - CoreMark 2 stayed `649893` cycles, CPI `1.110978`.
+  - Full `extra_net_delay` implementation failed badly: WNS `-2.404 ns`, TNS `-956.906 ns`, setup endpoints `1151`, WHS `0.031 ns`.
+  - Worst path remained a redirect payload CE path: `u_core/ex_mem_rd_reg[3]/C` -> `u_core/redirect_fallthrough_pc_q_reg[11]/CE`, data delay `12.065 ns`, route `76.394%`, logic levels `15`.
+  - Decision: reject/revert. Precomputing target alone adds state/fanout while leaving the real CE control cone intact.
+- Candidate B: combine the same precomputed target/fallthrough path with no-CE redirect payload loading. Normal redirect payload registers were written every cycle in the non-CSR else path and consumed only when `redirect_valid` was asserted.
+  - Focused CSR trap/control-flow regressions passed, rv32ui branch/JAL/JALR passed, and full `run_csr_phase_acceptance.ps1 -SkipVivado` passed.
+  - CoreMark 2 again stayed `649893` cycles, CPI `1.110978`.
+  - Full `extra_net_delay` implementation failed: WNS `-1.831 ns`, TNS `-542.941 ns`, setup endpoints `918`, WHS `0.030 ns`.
+  - Worst path moved to redirect payload D: `u_core/ex_mem_rd_reg[4]/C` -> `u_core/redirect_pc_q_reg[25]/D`, data delay `12.058 ns`, route `75.917%`, logic levels `14`.
+  - Decision: reject/revert. Combining precompute with no-CE removes the CE endpoint but exposes a still-too-large redirect target data path.
+- Conclusion: target precompute and redirect payload no-CE are exhausted for this CSR timing phase. The remaining path still couples forwarding/load-hazard state through redirect payload selection. The next serious RTL attempt should stop writing normal redirect payload from this EX cone and instead use a true later resolve/commit policy, or move to physical/floorplan clustering around the existing Phase 54 retained RTL.
+
+## 2026-06-03 CSR Phase 57 Redirect Floorplan Findings
+- A medium soft pblock around the retained RTL's CSR redirect/control cone was not effective. The candidate excluded DMEM, collected `926` u_core cells, and constrained them to `SLICE_X6Y0:SLICE_X85Y149` plus `DSP48_X0Y0:DSP48_X4Y59`, but still worsened routed timing.
+- Full `extra_net_delay` implementation with the pblock failed at WNS `-1.802 ns`, TNS `-807.888 ns`, setup endpoints `1088`, WHS `0.081 ns`. QoR was still valid (`RAMD64E=0`, `BlockRAM=24`), so the failure is placement/timing, not memory inference.
+- The second post-route `AggressiveExplore` physopt pass produced no WNS or TNS gain. Vivado also warned that post-route physopt is unlikely to help once WNS is this far below `-0.5 ns`.
+- Worst path after the floorplan was `u_core/id_ex_rs2_reg[2]/C` -> `u_core/redirect_pc_q_reg[10]/CE`, with data delay `11.459 ns`, route `74.815%`, and logic levels `15`. This is still the same broad operand/forwarding/redirect-enable cone, just with a different source endpoint.
+- Conclusion: medium/broad pblock tuning should stop for this CSR timing phase. The remaining gap is too large for soft placement nudges; the next useful work should either add a real redirect/commit latency boundary or run a separate DSP multiplier pipelining experiment, since Vivado repeatedly reports unpipelined DSP inputs/outputs.
+
+## 2026-06-04 CSR Phase 58 Late Redirect Commit Findings
+- A true late redirect commit packet is functionally viable but physically much worse in the current `cpu_core` shape. The candidate added `redirect_commit_*` registers, consumed them one cycle later through the existing `redirect_valid` path, and used a pending redirect kill window to clear younger frontend/pipeline state.
+- Focused trap/control-flow tests and rv32ui branch/JAL/JALR tests passed. Full fast CSR acceptance also passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 result cycles were `657149`, which is within the `682500` Phase 58 performance screen.
+- Vivado rejected the shape decisively: full `extra_net_delay` implementation failed at WNS `-3.464 ns`, TNS `-4433.798 ns`, setup endpoints `1997`, WHS `0.026 ns`. QoR remained valid (`RAMD64E=0`, `BlockRAM=24`).
+- The new worst path was `u_core/ex_mem_rd_reg[0]/C` -> `u_core/u_prefetch/skid_instr_reg[24]/R`, with data delay `12.958 ns`, route `75.205%`, and logic levels `18`. The pending-kill/front-end clear path became the dominant routed cone.
+- Conclusion: do not retry a broad global pending-flush late redirect boundary. It fixes the original redirect-valid ownership structurally, but replaces it with a worse frontend clear/reset fan-in. The next timing work should be narrower: either pipeline the multiplier/DSP path that repeatedly appears in timing/DRC reports, or add a localized prefetch/front-end flush register boundary before any further redirect-policy redesign.
+
+## 2026-06-04 Phase 59 Industrial M-Unit Findings
+- The retained RTL still couples multiplier completion to `cpu_core` through `mul_meta_valid_pipe`, `mul_meta_rd_pipe`, and `mul_meta_reg_write_pipe`, with `MUL_META_DEPTH = MUL_STAGES + 2`. This makes multiplier latency a CPU-control assumption instead of a local M-unit contract.
+- `rtl/multiplier.v` computes three parallel products (`product_ss`, `product_uu`, and `product_su`). A unified `(XLEN+1) x (XLEN+1)` signed product can cover `MUL`, `MULH`, `MULHSU`, and `MULHU` with fewer architectural product paths and clearer DSP pipelining.
+- Phase 59 should start with an independent `m_unit` and unit tests. Directly replacing `cpu_core` first would mix arithmetic correctness, scoreboard semantics, stale-response kill, shared writeback pressure, and timing behavior into one hard-to-debug candidate.
+- The CPU integration must use an epoch or equivalent kill token. Resetting or globally clearing DSP pipeline stages on every flush risks recreating the broad frontend/control cones that made Phase 58 fail.
+- The first structural check failure was intentional (`rtl/m_unit.v` missing). A later check-script failure came from PowerShell expanding `$signed` inside a double-quoted regex; the root cause was test infrastructure quoting, fixed by using a single-quoted regex.
+- The first M-unit behavior failure was a testbench handshake bug: after a response check, the next `issue` task could raise and lower `req_valid` entirely between two posedges, so the DUT never sampled the request. Aligning each issue to `negedge clk` fixed the test without changing RTL behavior.
+- The standalone `m_unit` focused tests now cover RV32/RV64 multiply semantics, one-request-per-cycle operation under no backpressure, response hold under backpressure, stale-epoch response drop, `rd=x0` write suppression, and same-rd ordered responses.
+- Vivado showed that a single registered result after the unified product does not fully pipeline the inferred 33x33 DSP cascade. The structural M-unit check was strengthened to require a registered full-width `product_pipe[1]`, a second `product_pipe[2]`, and result selection from the second product stage.
+- Even with the two-stage full-product pipe, Vivado still reports DSP MREG/PREG warnings for parts of the inferred cascade. A fully industrial FPGA multiplier may need an explicit DSP48/macro implementation under the same M-unit interface instead of relying only on generic Verilog multiply inference.
+- The temporary CPU M-unit request/response integration was functionally viable and stayed within the CoreMark 2 screen, but it did not beat the retained physical timing artifact:
+  - first full implementation WNS `-1.447 ns`;
+  - two-stage product full implementation WNS `-1.276 ns`;
+  - route-only AdvancedSkew from the same placement WNS `-1.746 ns`;
+  - second post-route physopt stayed `-1.276 ns`.
+- The Phase59B timing path remained in the broad forwarding/redirect/fallthrough control cone, not a clean isolated DSP path. Replacing `mul_meta_*` with an M-unit scoreboard is architecturally better, but by itself does not remove enough fan-in from the existing redirect critical path.
+- Decision: keep standalone Phase59A M-unit and tests, but revert the `cpu_core` integration. The next attempt should either use explicit DSP implementation inside M-unit or redesign the CPU-side M scoreboard/redirect boundary so the integration does not feed the same route-heavy control cone.
+- After the Phase59B revert, fresh CSR phase acceptance passed and CoreMark returned to `649893` cycles, matching the retained baseline behavior. This confirms the landed Phase59A slice is currently a source-listed standalone foundation, not an active CPU multiplier replacement.
