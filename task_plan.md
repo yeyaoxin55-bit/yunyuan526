@@ -704,3 +704,27 @@
   - reject any candidate that modifies `cpu_core` before Phase60A OOC evidence;
   - reject any CPU candidate that reintroduces M response data into redirect/fallthrough control paths;
   - reject any CPU candidate that worsens physical WNS versus `-1.064 ns`.
+
+## Phase 60A M-Unit Backend/OOC Gate - Implemented
+- Implemented backend split without changing `cpu_core`:
+  - `rtl/m_unit.v` is now a request/response wrapper with `M_BACKEND` selection.
+  - `rtl/m_unit_backend_generic.v` contains the portable unified signed product pipeline.
+  - `rtl/m_unit_backend_xilinx_dsp.v` contains the Xilinx-oriented backend with DSP synthesis attributes.
+  - `tb/tb_m_unit_backend_select.v` compares generic and Xilinx backend architectural results.
+- Added structural and OOC tooling:
+  - `scripts/check_m_unit_backend_boundary.ps1`
+  - `scripts/run_m_unit_ooc_synth.ps1`
+  - `scripts/check_m_unit_ooc_reports.ps1`
+- Verification evidence:
+  - `scripts/check_m_unit_backend_boundary.ps1` passed.
+  - `scripts/check_industrial_m_unit_boundary.ps1` passed after moving product-pipe checks to backend files.
+  - `scripts/check_project.ps1` passed.
+  - `scripts/run_modelsim.ps1` passed; new `tb_m_unit_backend_select` printed `PASS m_unit backend selection regression completed`.
+  - Generic OOC command `scripts/run_m_unit_ooc_synth.ps1 -Backend generic -Xlen 32` completed with `SYNTH_WORST_SLACK_NS=2.238`.
+  - Xilinx OOC command `scripts/run_m_unit_ooc_synth.ps1 -Backend xilinx_dsp -Xlen 32` completed with `SYNTH_WORST_SLACK_NS=2.238`.
+  - Xilinx OOC utilization: LUT `99`, FF `190`, DSP `4`.
+  - `scripts/check_m_unit_ooc_reports.ps1 -ReportDir build\vivado_synth_m_unit_xilinx_dsp_xlen32_100m -RequireDsp` passed with `M_UNIT_OOC_WNS_NS=2.238`.
+  - Extra full CSR acceptance screen `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 stayed at `649893` cycles, CPI `1.110978`.
+- Current decision:
+  - Phase60A backend/OOC slice is retainable.
+  - Phase60B CPU integration is now allowed to be evaluated, but only under the conservative no-same-cycle-M-response-control-forwarding boundary and the WNS `-1.064 ns` retention screen.

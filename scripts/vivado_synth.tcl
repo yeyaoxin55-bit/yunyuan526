@@ -65,6 +65,8 @@ set rtl_sources [list \
     [file join $repo_root "rtl" "prefetch.v"] \
     [file join $repo_root "rtl" "divider.v"] \
     [file join $repo_root "rtl" "multiplier.v"] \
+    [file join $repo_root "rtl" "m_unit_backend_generic.v"] \
+    [file join $repo_root "rtl" "m_unit_backend_xilinx_dsp.v"] \
     [file join $repo_root "rtl" "m_unit.v"] \
     [file join $repo_root "rtl" "uart.v"] \
     [file join $repo_root "rtl" "cpu_core.v"] \

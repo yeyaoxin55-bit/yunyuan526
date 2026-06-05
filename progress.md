@@ -1613,3 +1613,38 @@
   - `docs/superpowers/plans/2026-06-05-industrial-m-unit-phase60.md`
   - key gates: backend structural checks, ModelSim, OOC synth/report checks, then conservative CPU boundary v2 with no same-cycle M response forwarding into redirect/control paths.
 - Updated `task_plan.md` and `findings.md` with the Phase60 route, keep gates, and stop rules.
+
+## 2026-06-05 CSR Branch Session - Phase60A backend/OOC implementation
+- Started executing `docs/superpowers/plans/2026-06-05-industrial-m-unit-phase60.md`.
+- Task1 RED:
+  - Added `scripts/check_m_unit_backend_boundary.ps1`.
+  - Hooked new backend files and check into `scripts/check_project.ps1`.
+  - RED result matched expectation: missing `rtl/m_unit_backend_generic.v`, `rtl/m_unit_backend_xilinx_dsp.v`, and `tb/tb_m_unit_backend_select.v`.
+- Task2/Task3 GREEN:
+  - Added `rtl/m_unit_backend_generic.v`.
+  - Added `rtl/m_unit_backend_xilinx_dsp.v`.
+  - Reworked `rtl/m_unit.v` into a backend-selecting wrapper with `M_BACKEND`.
+  - Updated `scripts/check_industrial_m_unit_boundary.ps1` so product-pipeline checks now inspect backend files.
+  - Added backend source files to ModelSim, external ModelSim, Vivado synth, and Vivado implementation source lists.
+  - Added `tb/tb_m_unit_backend_select.v`.
+- Functional verification:
+  - `scripts/check_m_unit_backend_boundary.ps1` passed.
+  - `scripts/check_industrial_m_unit_boundary.ps1` passed.
+  - `scripts/check_project.ps1` passed.
+  - `git diff --check` passed.
+  - Full `scripts/run_modelsim.ps1` passed; compile had `Errors: 0, Warnings: 0`, and the new backend test printed `PASS m_unit backend selection regression completed`.
+- Task4 OOC tooling:
+  - Added `scripts/run_m_unit_ooc_synth.ps1`.
+  - Added `scripts/check_m_unit_ooc_reports.ps1`.
+  - Added both scripts to `scripts/check_project.ps1`.
+- OOC verification:
+  - Generic backend OOC: `scripts/run_m_unit_ooc_synth.ps1 -Backend generic -Xlen 32`, `SYNTH_WORST_SLACK_NS=2.238`.
+  - Xilinx backend OOC: `scripts/run_m_unit_ooc_synth.ps1 -Backend xilinx_dsp -Xlen 32`, `SYNTH_WORST_SLACK_NS=2.238`.
+  - Xilinx OOC utilization: LUT `99`, FF `190`, DSP `4`.
+  - `scripts/check_m_unit_ooc_reports.ps1 -ReportDir build\vivado_synth_m_unit_xilinx_dsp_xlen32_100m -RequireDsp` passed with `M_UNIT_OOC_WNS_NS=2.238`.
+- Extra CSR acceptance after source-list/backend split:
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - CoreMark 2 smoke stayed at `649893` cycles, CPI `1.110978`.
+- Decision so far:
+  - Phase60A backend/OOC slice is keepable.
+  - No Phase60B `cpu_core` integration has been started yet.

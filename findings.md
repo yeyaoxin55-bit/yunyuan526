@@ -683,3 +683,11 @@
 - The first CPU integration v2 candidate should intentionally give up same-cycle M response forwarding into branch/JALR/redirect paths. That is a controlled performance tradeoff meant to keep M response state out of `redirect_fallthrough_pc_q`, predictor update payloads, and branch target computation.
 - OOC synthesis is a filter, not SoC signoff. A non-negative M-unit OOC result only proves the backend is worth integrating; final retention still depends on Huoyue `soc_top` implementation beating WNS `-1.064 ns`, and ultimately reaching non-negative WNS.
 - Structural checks for Phase60 must reject CPU-control names inside the backend and reject `mul_meta_*` as active response tracking in the Phase60B CPU candidate.
+
+## 2026-06-05 Phase60A Backend/OOC Findings
+- Splitting `m_unit` into a wrapper plus backend modules preserved simulation behavior. Full `scripts/run_modelsim.ps1` passed after adding `m_unit_backend_generic`, `m_unit_backend_xilinx_dsp`, and `tb_m_unit_backend_select`.
+- The backend wrapper approach is a clean cut: `m_unit` retains request/response, metadata, epoch kill, and backpressure, while backend files contain only arithmetic pipeline logic.
+- Vivado OOC synthesis for both generic and Xilinx backend selectors produced the same first-screen timing result: `SYNTH_WORST_SLACK_NS=2.238` at `XLEN=32`, `MUL_PIPE_STAGES=4`, 100 MHz constraint.
+- Xilinx backend OOC resource screen showed LUT `99`, FF `190`, DSP `4`. This proves the backend can be measured as an isolated block before CPU integration.
+- Vivado still maps the 33x33 product into four DSP48E1 blocks with MREG values at `0` in the final report. Since OOC timing is clean at 100 MHz and no explicit unpipelined-DSP warning text was present, Phase60A is keepable; a true DSP48 primitive/macro remains a future improvement if SoC integration still fails.
+- Full CSR phase acceptance still passes after the backend/source-list split, with CoreMark 2 unchanged at `649893` cycles. Phase60A therefore did not disturb the retained CPU/CSR baseline.

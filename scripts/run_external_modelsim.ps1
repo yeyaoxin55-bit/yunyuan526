@@ -92,6 +92,8 @@ $sources = @(
   "rtl/prefetch.v",
   "rtl/divider.v",
   "rtl/multiplier.v",
+  "rtl/m_unit_backend_generic.v",
+  "rtl/m_unit_backend_xilinx_dsp.v",
   "rtl/m_unit.v",
   "rtl/cpu_core.v",
   "rtl/cpu_top.v",

@@ -18,6 +18,8 @@ $required = @(
   "rtl/uart.v",
   "rtl/divider.v",
   "rtl/csr_unit.v",
+  "rtl/m_unit_backend_generic.v",
+  "rtl/m_unit_backend_xilinx_dsp.v",
   "rtl/soc_top.v",
   "rtl/exception.v",
   "rtl/axi4lite_if.v",
@@ -33,6 +35,7 @@ $required = @(
   "tb/tb_multiplier_back_to_back.v",
   "tb/tb_m_unit_multiplier.v",
   "tb/tb_m_unit_pipeline.v",
+  "tb/tb_m_unit_backend_select.v",
   "tb/tb_mul_pipeline_back_to_back.v",
   "tb/tb_mul_result_forward_early.v",
   "tb/tb_ras_return.v",
@@ -73,6 +76,8 @@ $required = @(
   "scripts/run_riscv_test.ps1",
   "scripts/run_riscv_suite.ps1",
   "scripts/run_vivado_synth.ps1",
+  "scripts/run_m_unit_ooc_synth.ps1",
+  "scripts/check_m_unit_ooc_reports.ps1",
   "scripts/check_floorplan_hook.ps1",
   "scripts/check_bp_resource_profile.ps1",
   "scripts/check_vivado_generic_override.ps1",
@@ -91,6 +96,7 @@ $required = @(
   "scripts/check_csr_bp_update_boundary.ps1",
   "scripts/check_mul_early_forward_boundary.ps1",
   "scripts/check_industrial_m_unit_boundary.ps1",
+  "scripts/check_m_unit_backend_boundary.ps1",
   "scripts/check_divider_operand_boundary.ps1",
   "scripts/check_soc_board_clock.ps1",
   "scripts/check_soc_reset_start_flow.ps1",
@@ -126,5 +132,6 @@ if ($missing.Count -gt 0) {
 }
 
 & scripts/check_industrial_m_unit_boundary.ps1
+& scripts/check_m_unit_backend_boundary.ps1
 
 Write-Host "Project structure OK"
