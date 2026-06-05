@@ -1598,3 +1598,18 @@
 - Checked working tree after revert:
   - `rtl/cpu_core.v`, `tb/tb_mul_result_forward_early.v`, and `scripts/check_mul_early_forward_boundary.ps1` are no longer modified.
   - Retained changes are the standalone `rtl/m_unit.v`, M-unit tests, source-list additions, structural M-unit check, and planning records.
+
+## 2026-06-05 CSR Branch Session - Phase 60 industrial strategy planning
+- User approved proceeding with the industrial Phase60 strategy.
+- Re-read the retained Phase59A/Phase59B records and confirmed:
+  - current branch is ahead of origin by local commit `f591504`;
+  - `cpu_core` still uses `mul_meta_*` and `mul_fifo_*`;
+  - the retained standalone `m_unit` remains source-listed but not active as the CPU multiplier replacement;
+  - previous CPU M-unit integration was rejected because WNS `-1.276 ns` did not beat the best retained artifact WNS `-1.064 ns`.
+- Added Phase60 design spec:
+  - `docs/superpowers/specs/2026-06-05-industrial-m-unit-phase60-design.md`
+  - key split: Phase60A backend/OOC proof first, Phase60B CPU boundary second.
+- Added Phase60 implementation plan:
+  - `docs/superpowers/plans/2026-06-05-industrial-m-unit-phase60.md`
+  - key gates: backend structural checks, ModelSim, OOC synth/report checks, then conservative CPU boundary v2 with no same-cycle M response forwarding into redirect/control paths.
+- Updated `task_plan.md` and `findings.md` with the Phase60 route, keep gates, and stop rules.

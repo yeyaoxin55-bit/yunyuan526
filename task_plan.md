@@ -681,3 +681,26 @@
 - Decision: reject and revert Phase59B CPU integration. Keep Phase59A standalone M-unit and tests as the reusable foundation. Do not land the timing-worse `cpu_core` M-unit scoreboard integration until the next architecture cut also addresses the redirect/forwarding control cone or uses explicit DSP primitives.
 - Post-revert verification: fresh `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 returned to the retained baseline result `649893` cycles, CPI `1.110978`, with `COREMARK_MUL_WAIT_STALLS=0`.
 - Next direction: either instantiate a Xilinx-specific DSP multiplier macro/primitive behind the M-unit interface, or design a narrower CPU integration boundary that does not put M-result scoreboard/forwarding state into the existing redirect/fallthrough critical cone.
+
+## Phase 60 Industrial M-Unit Backend and CPU Boundary - Planned
+- Goal: make the retained Phase59A M-unit into a signoff-oriented execution block before attempting another CPU integration.
+- Design spec: `docs/superpowers/specs/2026-06-05-industrial-m-unit-phase60-design.md`.
+- Implementation plan: `docs/superpowers/plans/2026-06-05-industrial-m-unit-phase60.md`.
+- Phase60A strategy:
+  - split the M-unit backend behind the existing request/response wrapper;
+  - keep `M_BACKEND=0` generic as portable default;
+  - add `M_BACKEND=1` Xilinx DSP backend candidate;
+  - add repeatable OOC synth and report checks for `m_unit`;
+  - do not touch `cpu_core` until OOC backend evidence exists.
+- Phase60B strategy:
+  - replace active `mul_meta_*` CPU response tracking only after Phase60A passes;
+  - use a narrower issue/scoreboard/writeback boundary;
+  - deliberately remove M response same-cycle forwarding into branch/JALR/redirect/bp_update paths in the first candidate;
+  - keep epoch-based wrong-path response kill, with `cpu_core` still owning redirect, flush, side-effect kill, CSR commit, predictor update, and retire.
+- Keep gates:
+  - Phase60A must pass structural checks, ModelSim, OOC synth for generic and Xilinx backends, and OOC report checks.
+  - Phase60B must pass full functional acceptance, `rv32um`, CSR acceptance, CoreMark 2 under `682500` cycles, QoR, and must beat the current best physical WNS `-1.064 ns` before being retained.
+- Stop rules:
+  - reject any candidate that modifies `cpu_core` before Phase60A OOC evidence;
+  - reject any CPU candidate that reintroduces M response data into redirect/fallthrough control paths;
+  - reject any CPU candidate that worsens physical WNS versus `-1.064 ns`.

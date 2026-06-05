@@ -676,3 +676,10 @@
 - The Phase59B timing path remained in the broad forwarding/redirect/fallthrough control cone, not a clean isolated DSP path. Replacing `mul_meta_*` with an M-unit scoreboard is architecturally better, but by itself does not remove enough fan-in from the existing redirect critical path.
 - Decision: keep standalone Phase59A M-unit and tests, but revert the `cpu_core` integration. The next attempt should either use explicit DSP implementation inside M-unit or redesign the CPU-side M scoreboard/redirect boundary so the integration does not feed the same route-heavy control cone.
 - After the Phase59B revert, fresh CSR phase acceptance passed and CoreMark returned to `649893` cycles, matching the retained baseline behavior. This confirms the landed Phase59A slice is currently a source-listed standalone foundation, not an active CPU multiplier replacement.
+
+## 2026-06-05 Phase 60 Industrial M-Unit Strategy Findings
+- The next useful work must separate arithmetic backend proof from CPU control proof. Directly changing `cpu_core` again would mix DSP mapping, scoreboard correctness, writeback arbitration, and redirect timing into one candidate, which is exactly what made Phase59B hard to retain.
+- Phase60A should be allowed to land even if Phase60B later fails timing. A clean backend/OOC flow is reusable IP evidence; a timing-worse CPU integration is not.
+- The first CPU integration v2 candidate should intentionally give up same-cycle M response forwarding into branch/JALR/redirect paths. That is a controlled performance tradeoff meant to keep M response state out of `redirect_fallthrough_pc_q`, predictor update payloads, and branch target computation.
+- OOC synthesis is a filter, not SoC signoff. A non-negative M-unit OOC result only proves the backend is worth integrating; final retention still depends on Huoyue `soc_top` implementation beating WNS `-1.064 ns`, and ultimately reaching non-negative WNS.
+- Structural checks for Phase60 must reject CPU-control names inside the backend and reject `mul_meta_*` as active response tracking in the Phase60B CPU candidate.
