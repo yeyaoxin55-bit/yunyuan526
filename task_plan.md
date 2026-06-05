@@ -728,3 +728,25 @@
 - Current decision:
   - Phase60A backend/OOC slice is retainable.
   - Phase60B CPU integration is now allowed to be evaluated, but only under the conservative no-same-cycle-M-response-control-forwarding boundary and the WNS `-1.064 ns` retention screen.
+
+## Phase 60B M-Unit CPU Boundary v2 - Rejected/Reverted
+- Goal: evaluate the first conservative CPU-side integration after Phase60A by replacing fixed `mul_meta_*` response tracking with an `m_unit` request/response boundary, pending-destination scoreboard, epoch-based stale response kill, and no same-cycle M response forwarding into branch/JALR/redirect/predictor paths.
+- Functional and performance result:
+  - Structural CPU M-unit boundary v2 check passed during the trial.
+  - Full ModelSim passed; `tb_mul_result_forward_early` was intentionally updated to the conservative 4-stall expectation during the trial.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32um -FastMul 0 -MulStages 1` passed all `rv32um` tests.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - Slow CoreMark 2 with `FAST_MUL=0 / MUL_STAGES=1` measured `664509` cycles, CPI `1.135969`, below the `682500` screen.
+- Physical result:
+  - Full Huoyue `soc_top` implementation with `ExtraNetDelay_high/AggressiveExplore/Explore/AggressiveExplore` generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing at WNS `-2.718 ns`.
+  - This is far worse than the retention threshold and current best artifact WNS `-1.064 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[4]/C` -> `u_core/u_prefetch/current_pred_target_reg[13]/CE`, data path delay `12.404 ns`, route `10.001 ns` (`80.628%`), logic levels `13`.
+  - Vivado DRC still reported DSP input/output pipeline warnings on inferred DSPs under `u_core/gen_m_unit_active.u_m_unit/gen_xilinx_backend.u_backend/product*`, so the inferred Xilinx backend is not yet an industrial SoC-level DSP implementation.
+- Decision:
+  - Reject and revert the Phase60B CPU integration v2 RTL/test/check changes.
+  - Keep the already landed Phase60A backend/OOC slice as reusable IP evidence.
+  - Do not retry request/response CPU wiring alone. The next retained candidate must first address either a true DSP48 primitive/macro backend or the frontend/prefetch redirect CE boundary exposed by this failed physical run.
+- Post-revert verification:
+  - `scripts/check_project.ps1` passed.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - CoreMark 2 returned to the retained baseline: `649893` cycles, CPI `1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.

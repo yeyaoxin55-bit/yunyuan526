@@ -1648,3 +1648,35 @@
 - Decision so far:
   - Phase60A backend/OOC slice is keepable.
   - No Phase60B `cpu_core` integration has been started yet.
+
+## 2026-06-05 CSR Branch Session - Phase60B CPU boundary v2 rejected and reverted
+- Implemented and screened a temporary conservative Phase60B CPU integration candidate:
+  - active `m_unit` request/response path under `FAST_MUL=0`;
+  - pending-destination scoreboard and epoch-based stale response kill;
+  - no same-cycle M response forwarding into branch/JALR/redirect/predictor paths;
+  - narrowed trap/order fence after the first over-conservative fence missed the CoreMark screen.
+- Trial verification before rejection:
+  - `scripts/check_cpu_m_unit_boundary_v2.ps1` passed.
+  - `scripts/check_mul_early_forward_boundary.ps1` passed in no-early-forward mode.
+  - `scripts/check_project.ps1` passed.
+  - `scripts/run_modelsim.ps1` passed.
+  - `scripts/run_riscv_suite.ps1 -Suite rv32um -FastMul 0 -MulStages 1` passed all `rv32um` tests.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - Slow CoreMark 2 passed the performance screen after narrowing the fence: `COREMARK_RESULT_CYCLES=664509`, `COREMARK_CPI=1.135969`, `COREMARK_MUL_WAIT_STALLS=1947`.
+- Physical rejection evidence:
+  - Full Huoyue `soc_top` implementation generated a bitstream and passed QoR, but failed timing at WNS `-2.718 ns`.
+  - Worst path: `u_core/ex_mem_rd_reg[4]/C` -> `u_core/u_prefetch/current_pred_target_reg[13]/CE`, data delay `12.404 ns`, route `80.628%`, logic levels `13`.
+  - Vivado DRC still warned about unpipelined inferred DSP stages inside the Xilinx backend product hierarchy.
+- Action taken:
+  - Reverted the temporary Phase60B CPU/test/check changes.
+  - Removed the temporary `scripts/check_cpu_m_unit_boundary_v2.ps1`.
+  - Preserved the previously pushed Phase60A backend/OOC implementation.
+  - Updated `task_plan.md` and `findings.md` so future work does not repeat this rejected CPU wiring shape.
+- Fresh post-revert verification:
+  - `scripts/check_project.ps1` passed with `Industrial M-unit boundary OK`, `M-unit backend boundary OK`, and `Project structure OK`.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - Post-revert CoreMark 2 returned to the retained baseline: `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.
+- Commit/push status:
+  - Local commit created for the rejection documentation.
+  - Push attempts failed because this environment could not connect to `github.com:443`; `Test-NetConnection github.com -Port 443` reported `TcpTestSucceeded=False` while ping succeeded.
+  - Branch remains locally ahead of `origin/新增CSR` until network connectivity is restored and `git push` can complete.
