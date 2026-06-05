@@ -1680,3 +1680,37 @@
   - Local commit created for the rejection documentation.
   - Push attempts failed because this environment could not connect to `github.com:443`; `Test-NetConnection github.com -Port 443` reported `TcpTestSucceeded=False` while ping succeeded.
   - Branch remains locally ahead of `origin/新增CSR` until network connectivity is restored and `git push` can complete.
+
+## 2026-06-05 CSR Branch Session - Phase61 prefetch valid-only flush start
+- User approved executing the industrial Phase61 strategy.
+- Confirmed branch `新增CSR` is synchronized with `origin/新增CSR`; the only pre-existing untracked file remains `docs/superpowers/plans/2026-06-04-csr-late-redirect-commit.md`.
+- Read current `rtl/prefetch.v` and confirmed the `flush_i` branch clears both valid bits and payload registers, including `current_pred_target` and `skid_instr`.
+- Added Phase61 design spec:
+  - `docs/superpowers/specs/2026-06-05-prefetch-valid-flush-boundary-design.md`
+- Added Phase61 implementation plan:
+  - `docs/superpowers/plans/2026-06-05-prefetch-valid-flush-boundary.md`
+- Updated `task_plan.md` and `findings.md` with the Phase61 scope, keep gate, and stop rule.
+- TDD/functional trial:
+  - Added temporary `scripts/check_prefetch_valid_flush_boundary.ps1`.
+  - RED structural check failed as expected: `Flush branch must not assign payload register current_pc`.
+  - Hooked the check into `scripts/check_project.ps1`; project RED failed for the same reason.
+  - Extended `tb/tb_prefetch.v` to require current payload preservation under flush, fetch-after-flush recovery, skid flush, and fetch-after-skid-flush recovery.
+  - RED focused ModelSim failed as expected: `FAIL prefetch flush changed current payload`.
+  - Changed `rtl/prefetch.v` flush to clear only `current_valid` and `skid_valid`.
+  - GREEN focused ModelSim passed with `PASS prefetch unit regression completed`.
+  - GREEN structural checks passed: `Prefetch valid-only flush boundary OK`, `Project structure OK`.
+  - Full `scripts/run_modelsim.ps1` passed.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 stayed `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`.
+- Physical trial:
+  - Command: `scripts/run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build\vivado_impl_soc_top_phase61_prefetch_valid_flush_extra_net_delay_100m -Jobs 4 -PlaceDirective ExtraNetDelay_high -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore`.
+  - Result: bitstream generated, QoR passed (`RAMD64E=0`, `BlockRAM=24`), timing failed with `IMPL_WORST_SLACK_NS=-2.406`.
+  - `scripts/check_vivado_timing.ps1` failed with WNS `-2.406 ns`.
+  - Timing summary: TNS `-849.795 ns`, setup failing endpoints `909`, WHS `0.031 ns`.
+  - Worst setup path: `u_core/ex_mem_rd_reg[4]/C` -> `u_core/redirect_pc_q_reg[5]/CE`, data delay `12.053 ns`, route `76.646%`, logic levels `16`.
+- Decision:
+  - Rejected and reverted the temporary Phase61 RTL/test/check changes.
+  - Kept the Phase61 spec/plan and documented findings.
+- Fresh post-revert verification:
+  - `scripts/check_project.ps1` passed with `Industrial M-unit boundary OK`, `M-unit backend boundary OK`, and `Project structure OK`.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - Post-revert CoreMark 2 returned to `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`.

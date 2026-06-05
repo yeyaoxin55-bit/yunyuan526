@@ -750,3 +750,37 @@
   - `scripts/check_project.ps1` passed.
   - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
   - CoreMark 2 returned to the retained baseline: `649893` cycles, CPI `1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.
+
+## Phase 61 Prefetch Valid-Only Flush Boundary - Rejected/Reverted
+- Goal: cut the redirect/frontend timing cone exposed by Phase60B by making `prefetch` flush invalidate only current/skid valid bits, leaving payload registers untouched while invalid.
+- Design spec: `docs/superpowers/specs/2026-06-05-prefetch-valid-flush-boundary-design.md`.
+- Implementation plan: `docs/superpowers/plans/2026-06-05-prefetch-valid-flush-boundary.md`.
+- Strategy:
+  - update `rtl/prefetch.v` so reset still initializes payloads, but `flush_i` clears only `current_valid` and `skid_valid`;
+  - add a focused `tb_prefetch` regression that proves current flush, skid flush, and fetch-after-flush recovery;
+  - add a structural check rejecting payload assignments in the `flush_i` branch;
+  - do not modify M-unit CPU integration, CSR/trap semantics, branch predictor policy, PMP/MMU/interrupt/debug scope, or DSP48 backend in this phase.
+- Keep gate:
+  - focused prefetch test, structural checks, full ModelSim or CSR acceptance, and `git diff --check` must pass;
+  - CoreMark 2 must stay below `682500` cycles;
+  - full Huoyue `soc_top` implementation must pass QoR and beat the current best physical artifact WNS `-1.064 ns` before the RTL is retained.
+- Stop rule:
+  - if timing is `<= -1.064 ns`, reject and revert RTL/test/check changes, keeping only the documented finding.
+- Result:
+  - RED structural check failed on the retained baseline with `Flush branch must not assign payload register current_pc`.
+  - RED `tb_prefetch` failed on the retained baseline with `FAIL prefetch flush changed current payload`.
+  - GREEN RTL changed `prefetch` flush to clear only `current_valid` and `skid_valid`.
+  - Focused `tb_prefetch` passed after the RTL change.
+  - `scripts/check_prefetch_valid_flush_boundary.ps1`, `scripts/check_project.ps1`, and `git diff --check` passed during the trial.
+  - Full `scripts/run_modelsim.ps1` passed.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`; CoreMark 2 stayed at `649893` cycles, CPI `1.110978`.
+  - Full Huoyue `soc_top` implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`) but failed timing at WNS `-2.406 ns`, TNS `-849.795 ns`, setup failing endpoints `909`, WHS `0.031 ns`.
+  - Worst setup path: `u_core/ex_mem_rd_reg[4]/C` -> `u_core/redirect_pc_q_reg[5]/CE`, data delay `12.053 ns`, route `76.646%`, logic levels `16`.
+- Decision:
+  - Reject and revert the Phase61 RTL/test/check changes because WNS `-2.406 ns` is far worse than the `-1.064 ns` retention threshold.
+  - Keep the Phase61 spec/plan and findings as evidence.
+  - Do not continue prefetch payload-clear-only tweaks. The result removes the prefetch payload endpoint but exposes the same broad redirect PC CE cone.
+- Post-revert verification:
+  - `scripts/check_project.ps1` passed.
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
+  - CoreMark 2 returned to the retained baseline: `649893` cycles, CPI `1.110978`.
