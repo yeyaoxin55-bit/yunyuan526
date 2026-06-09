@@ -11,12 +11,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $repoRoot "scripts\use_repo_temp.ps1")
+$repoTemp = Set-RepoTemp -RepoRoot $repoRoot
+
 $gcc = Get-Command ($ToolPrefix + "gcc") -ErrorAction SilentlyContinue
 if (-not $gcc) {
   throw "RISC-V gcc not found. Pass -ToolPrefix <path-prefix>, e.g. C:\riscv\bin\riscv64-unknown-elf-"
 }
 
-$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $resolvedOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $repoRoot $OutDir }
 New-Item -ItemType Directory -Force -Path $resolvedOutDir | Out-Null
 

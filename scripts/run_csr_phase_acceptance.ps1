@@ -10,6 +10,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $repoRoot "scripts\use_repo_temp.ps1")
+$repoTemp = Set-RepoTemp -RepoRoot $repoRoot
 
 function Invoke-AcceptanceStep {
   param(

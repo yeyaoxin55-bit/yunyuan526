@@ -1791,3 +1791,37 @@
   - reran with `$env:TEMP` and `$env:TMP` pointed to `build\tmp` under the repo;
   - post-revert CSR acceptance then passed with `CSR_PHASE_ACCEPTANCE_PASS=1`;
   - CoreMark 2 returned to `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.
+
+## 2026-06-09 CSR Branch Session - Phase63A repo temp toolchain hardening start
+- User approved the recommended next step: harden verification scripts before attempting another timing-sensitive RTL cleanup.
+- Confirmed current branch `新增CSR` is synchronized with `origin/新增CSR`; the only pre-existing untracked file remains `docs/superpowers/plans/2026-06-04-csr-late-redirect-commit.md`.
+- Added Phase63A design spec:
+  - `docs/superpowers/specs/2026-06-09-repo-temp-toolchain-hardening-design.md`.
+- Added Phase63A implementation plan:
+  - `docs/superpowers/plans/2026-06-09-repo-temp-toolchain-hardening.md`.
+- Spec/plan placeholder scan found no matches for `TBD`, `TODO`, `implement later`, `fill in`, `placeholder`, `appropriate`, or `Similar to`.
+- Scope is script/toolchain only:
+  - no RTL changes;
+  - no Vivado strategy changes;
+  - no cleanup of C: drive contents.
+- TDD RED:
+  - added `scripts/check_repo_temp_boundary.ps1`;
+  - hooked required files and check invocation into `scripts/check_project.ps1`;
+  - focused RED failed as expected with `Missing required file: scripts/use_repo_temp.ps1`;
+  - project RED failed as expected with missing `scripts/use_repo_temp.ps1`.
+- GREEN implementation:
+  - added silent helper `scripts/use_repo_temp.ps1` with `Set-RepoTemp`;
+  - first check run exposed a test-script quoting issue because double-quoted regex expanded `$env:TEMP`;
+  - fixed regex literals to single quotes;
+  - check then failed on the expected missing build-script usage;
+  - wired helper into `scripts/build_baremetal.ps1`, `scripts/build_riscv_test.ps1`, `scripts/build_coremark.ps1`, and `scripts/run_csr_phase_acceptance.ps1`;
+  - `scripts/check_repo_temp_boundary.ps1` passed with `Repo temp boundary OK`.
+- Verification:
+  - `scripts/check_project.ps1` passed with `Repo temp boundary OK` and `Project structure OK`;
+  - `git diff --check` returned exit code 0;
+  - baremetal build smoke passed without manual `TEMP/TMP` override:
+    `scripts/build_baremetal.ps1 -Sources sw\csr_trap_tests\csr_rw.S -OutName csr_rw_temp_smoke -ToolPrefix xpack-riscv-none-elf-gcc-15.2.0-1\bin\riscv-none-elf- -OutDir build\csr_trap_tests_temp_smoke -March rv32im_zicsr -Mabi ilp32`;
+  - full CSR acceptance passed without manual `TEMP/TMP` override:
+    `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`;
+  - result: `CSR_PHASE_ACCEPTANCE_PASS=1`, `CSR_PHASE_VIVADO_SKIPPED=1`;
+  - CoreMark 2 stayed at `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.

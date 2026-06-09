@@ -835,3 +835,34 @@
   - reject and revert the Phase62B RTL/test/check/source-list changes;
   - keep the Phase62B plan and findings as evidence;
   - do not start further cleanup by extracting writeback alone unless paired with a stronger physical boundary strategy.
+
+## Phase 63A Repo Temp Toolchain Hardening - Implemented
+- Goal: make RISC-V build and CSR acceptance scripts deterministic when the default Windows `%TEMP%` drive is full.
+- Design spec: `docs/superpowers/specs/2026-06-09-repo-temp-toolchain-hardening-design.md`.
+- Implementation plan: `docs/superpowers/plans/2026-06-09-repo-temp-toolchain-hardening.md`.
+- Scope:
+  - add a silent `scripts/use_repo_temp.ps1` helper that sets `$env:TEMP` and `$env:TMP` to repo-local `build\tmp`;
+  - wire it into RISC-V build entry points and CSR acceptance before GCC, objcopy, or nested PowerShell steps run;
+  - add a structural/behavioral project check.
+- Gate:
+  - RED/GREEN `scripts/check_repo_temp_boundary.ps1`;
+  - `scripts/check_project.ps1`;
+  - `git diff --check`;
+  - baremetal CSR build smoke without manual `TEMP/TMP` override;
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` without manual `TEMP/TMP` override.
+- Non-goals:
+  - no RTL changes;
+  - no Vivado timing strategy changes;
+  - no C: drive cleanup.
+- Result:
+  - added `scripts/use_repo_temp.ps1`;
+  - added `scripts/check_repo_temp_boundary.ps1`;
+  - wired repo-local temp setup into `scripts/build_baremetal.ps1`, `scripts/build_riscv_test.ps1`, `scripts/build_coremark.ps1`, and `scripts/run_csr_phase_acceptance.ps1`;
+  - hooked the boundary check into `scripts/check_project.ps1`.
+- Verification:
+  - RED check initially failed on missing helper, then on missing build-script usage;
+  - GREEN `scripts/check_repo_temp_boundary.ps1` passed;
+  - `scripts/check_project.ps1` passed;
+  - `git diff --check` passed;
+  - baremetal `csr_rw` build smoke passed without manual `TEMP/TMP` override;
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed without manual `TEMP/TMP` override, with CoreMark 2 at `649893` cycles and CPI `1.110978`.

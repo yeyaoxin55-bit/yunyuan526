@@ -724,3 +724,10 @@
 - The Phase62B writeback arbiter extraction was functionally clean but physically rejected. The candidate passed focused RED/GREEN tests, structural checks, full ModelSim, and CSR acceptance with CoreMark unchanged, but full Huoyue implementation regressed to WNS `-1.856 ns`.
 - The worst path remained in the broad redirect PC cone: `u_core/ex_mem_valid_reg/C` -> `u_core/redirect_pc_q_reg[19]/D`, data path delay `11.743 ns`, route `74.573%`, logic levels `16`. A writeback-only extraction therefore does not cut the dominant path.
 - During post-revert verification, CSR acceptance initially failed because C: had `0` bytes free and RISC-V GCC could not write temporary assembler output under `%TEMP%`. Re-running with `TEMP/TMP` pointed at `build\tmp` on E: resolved the environment issue without source changes.
+
+## 2026-06-09 Phase63A Repo Temp Toolchain Findings
+- The next industrial cleanup should first make verification deterministic. A full C: drive can currently make `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` fail during RISC-V GCC assembly even when retained RTL is unchanged.
+- The correct boundary is repo-local environment setup in build scripts, not manual operator instructions. `scripts/build_baremetal.ps1`, `scripts/build_riscv_test.ps1`, `scripts/build_coremark.ps1`, and `scripts/run_csr_phase_acceptance.ps1` are the first required entry points.
+- The helper must be silent by default. Existing callers parse output lines such as `ELF=`, `MAP=`, `IMEM_HEX=`, `DMEM_HEX=`, and `COREMARK_*`; extra status text in the helper would add noise and risk fragile parsing.
+- PowerShell regex checks for literal `$env:TEMP` and `$repoRoot` must use single-quoted strings. Double-quoted patterns expand those variables and can turn a structural check into a parser error instead of a real boundary failure.
+- The repo-local temp hardening is functionally transparent: CSR acceptance still passes and CoreMark 2 remains `649893` cycles, but GCC now has a writable temp path on E: even when C: is full.

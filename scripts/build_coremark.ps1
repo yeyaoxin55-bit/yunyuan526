@@ -11,6 +11,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $repoRoot "scripts\use_repo_temp.ps1")
+$repoTemp = Set-RepoTemp -RepoRoot $repoRoot
+
 $gccPath = if ([System.IO.Path]::IsPathRooted($ToolPrefix)) { $ToolPrefix + "gcc.exe" } else { Join-Path $repoRoot ($ToolPrefix + "gcc.exe") }
 $objcopyPath = if ([System.IO.Path]::IsPathRooted($ToolPrefix)) { $ToolPrefix + "objcopy.exe" } else { Join-Path $repoRoot ($ToolPrefix + "objcopy.exe") }
 

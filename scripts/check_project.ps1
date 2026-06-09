@@ -69,6 +69,8 @@ $required = @(
   "scripts/run_csr_trap_programs.ps1",
   "scripts/run_csr_phase_acceptance.ps1",
   "scripts/check_csr_phase_acceptance.ps1",
+  "scripts/use_repo_temp.ps1",
+  "scripts/check_repo_temp_boundary.ps1",
   "scripts/check_vivado_timing.ps1",
   "scripts/convert_elf_to_hex.ps1",
   "scripts/build_baremetal.ps1",
@@ -133,5 +135,6 @@ if ($missing.Count -gt 0) {
 
 & scripts/check_industrial_m_unit_boundary.ps1
 & scripts/check_m_unit_backend_boundary.ps1
+& scripts/check_repo_temp_boundary.ps1
 
 Write-Host "Project structure OK"
