@@ -806,3 +806,32 @@
   - keep failed experiment conclusions in docs, not failed RTL.
 - Next recommended implementation phase:
   - Phase62B should extract `writeback_arb.v` first, with focused tests and structural checks, before touching redirect.
+
+## Phase 62B Writeback Arbiter Extraction - Rejected/Reverted
+- Goal: extract primary MEM/WB and shared load/M writeback selection from `cpu_core` into a small combinational `writeback_arb` module.
+- Plan: `docs/superpowers/plans/2026-06-09-writeback-arb-extraction.md`.
+- Boundary:
+  - `cpu_core` keeps retire timing, replay/flush kill, load/M response retirement policy, and all redirect/trap side-effect control.
+  - `writeback_arb` only selects writeback data/enables and is XLEN-parameterized.
+  - The shared second writeback port must preserve load-over-multiply priority even when the same-cycle load targets `x0`.
+- Gate:
+  - TDD focused `tb_writeback_arb` RED/GREEN;
+  - `scripts/check_writeback_arb_boundary.ps1`;
+  - `scripts/check_project.ps1`;
+  - `git diff --check`;
+  - full `scripts/run_modelsim.ps1`;
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`;
+  - Huoyue `soc_top` implementation/QoR/timing screen against WNS `-1.064 ns`.
+- Decision rule:
+  - retain only if functional acceptance passes, CoreMark 2 remains below `682500`, and physical WNS is not worse than `-1.064 ns`;
+  - otherwise revert RTL/test/script/source-list changes and keep the documented finding.
+- Result:
+  - focused RED/GREEN `tb_writeback_arb` and structural checks proved the extraction behavior and boundary;
+  - full ModelSim passed with the candidate;
+  - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`;
+  - CoreMark 2 stayed at `649893` cycles, CPI `1.110978`;
+  - full Huoyue `soc_top` implementation generated a bitstream and passed QoR (`RAMD64E=0`, `BlockRAM=24`), but timing failed at WNS `-1.856 ns`, worse than the retained `-1.064 ns` artifact.
+- Decision:
+  - reject and revert the Phase62B RTL/test/check/source-list changes;
+  - keep the Phase62B plan and findings as evidence;
+  - do not start further cleanup by extracting writeback alone unless paired with a stronger physical boundary strategy.

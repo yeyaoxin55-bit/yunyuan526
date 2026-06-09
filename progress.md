@@ -1733,3 +1733,61 @@
   - `git diff --check` passed.
   - `scripts/check_project.ps1` passed.
   - No RTL files were modified in Phase62A.
+
+## 2026-06-09 CSR Branch Session - Phase62B writeback arbiter extraction start
+- User approved executing the next industrial modularization step.
+- Restored current plan context and confirmed branch `新增CSR` is synchronized with `origin/新增CSR`.
+- Current untracked files before Phase62B edits:
+  - pre-existing historical plan: `docs/superpowers/plans/2026-06-04-csr-late-redirect-commit.md`;
+  - new Phase62B plan: `docs/superpowers/plans/2026-06-09-writeback-arb-extraction.md`.
+- Phase62B plan placeholder scan found no matches for `TBD`, `TODO`, `implement later`, `fill in`, `placeholder`, `appropriate`, or `Similar to`.
+- Started TDD/structural flow for `writeback_arb.v`.
+- RED focused ModelSim failed as expected before production RTL existed:
+  - `vlog` reported `Failed to open design unit file "rtl/writeback_arb.v"`.
+- RED structural check failed as expected:
+  - `scripts/check_writeback_arb_boundary.ps1` reported `Missing required file: rtl/writeback_arb.v`.
+- Added `rtl/writeback_arb.v` as a pure combinational `XLEN`-parameterized selector.
+- Focused GREEN passed:
+  - command compiled `rtl/writeback_arb.v` and `tb/tb_writeback_arb.v`;
+  - `tb_writeback_arb` printed `PASS writeback arb regression completed`;
+  - ModelSim reported `Errors: 0, Warnings: 0`.
+- Integrated `writeback_arb` into `rtl/cpu_core.v` while preserving the existing M retire policy:
+  - `load_wb_write_en = load_resp_retire_valid && load_resp_reg_write`;
+  - `mul_retire_valid = mul_resp_ready_valid && !load_wb_write_en`.
+- Added `writeback_arb.v` to ModelSim, external ModelSim, Vivado synth, and Vivado implementation source lists.
+- Added `tb_writeback_arb` to full ModelSim sources and test list.
+- Structural verification passed:
+  - `scripts/check_writeback_arb_boundary.ps1` printed `Writeback arb boundary OK`;
+  - `scripts/check_project.ps1` printed `Project structure OK`;
+  - `git diff --check` returned exit code 0.
+- Full functional verification passed:
+  - `scripts/run_modelsim.ps1` returned exit code 0;
+  - full compile included `rtl/writeback_arb.v` and `tb/tb_writeback_arb.v`;
+  - compile reported `Errors: 0, Warnings: 0`;
+  - `tb_writeback_arb` printed `PASS writeback arb regression completed`.
+- CSR phase acceptance passed:
+  - command: `scripts/run_csr_phase_acceptance.ps1 -SkipVivado`;
+  - result: `CSR_PHASE_ACCEPTANCE_PASS=1`, `CSR_PHASE_VIVADO_SKIPPED=1`;
+  - CoreMark 2 result stayed at `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.
+- Physical screen rejected the candidate:
+  - command: `scripts/run_vivado_impl.ps1 -Top soc_top -Constraint huoyue_uart -OutDir build\vivado_impl_soc_top_phase62b_writeback_arb_extra_net_delay_100m -Jobs 4 -PlaceDirective ExtraNetDelay_high -PhysOptDirective AggressiveExplore -RouteDirective Explore -PostRoutePhysOptDirective AggressiveExplore`;
+  - implementation completed and generated `soc_top.bit`;
+  - Vivado reported `IMPL_WORST_SLACK_NS=-1.856`;
+  - `scripts/check_vivado_qor.ps1 -ReportDir build\vivado_impl_soc_top_phase62b_writeback_arb_extra_net_delay_100m -Top soc_top -RequireDmemBlockRam` passed with `RAMD64E=0`, `BlockRAM=24`;
+  - `scripts/check_vivado_timing.ps1 -ReportDir build\vivado_impl_soc_top_phase62b_writeback_arb_extra_net_delay_100m` failed with WNS `-1.856 ns`.
+- Worst path evidence:
+  - source `u_core/ex_mem_valid_reg/C`;
+  - destination `u_core/redirect_pc_q_reg[19]/D`;
+  - data path delay `11.743 ns`, logic `25.427%`, route `74.573%`;
+  - logic levels `16`.
+- Decision:
+  - rejected Phase62B RTL/test/check/source-list changes because WNS `-1.856 ns` is worse than the retained artifact WNS `-1.064 ns`;
+  - reverted `rtl/cpu_core.v`, `scripts/check_project.ps1`, `scripts/run_external_modelsim.ps1`, `scripts/run_modelsim.ps1`, `scripts/vivado_impl.tcl`, and `scripts/vivado_synth.tcl`;
+  - removed temporary candidate files `rtl/writeback_arb.v`, `tb/tb_writeback_arb.v`, and `scripts/check_writeback_arb_boundary.ps1`.
+- Post-revert checks:
+  - `scripts/check_project.ps1` passed with `Project structure OK`;
+  - first `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` rerun failed during RISC-V GCC assembly because `%TEMP%` was on full C: drive (`No space left on device`);
+  - root cause was environmental: `Get-PSDrive` showed C: free space `0`, while E: had about `190 GB` free;
+  - reran with `$env:TEMP` and `$env:TMP` pointed to `build\tmp` under the repo;
+  - post-revert CSR acceptance then passed with `CSR_PHASE_ACCEPTANCE_PASS=1`;
+  - CoreMark 2 returned to `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`, `COREMARK_MUL_WAIT_STALLS=0`.
