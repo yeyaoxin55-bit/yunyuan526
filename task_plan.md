@@ -784,3 +784,25 @@
   - `scripts/check_project.ps1` passed.
   - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
   - CoreMark 2 returned to the retained baseline: `649893` cycles, CPI `1.110978`.
+
+## Phase 62 CPU Core Modularization - Phase62A Design Complete
+- Goal: turn `cpu_core` from a monolithic implementation file into an industrial top-level pipeline orchestrator with explicit submodule contracts, without changing RTL in the design phase.
+- Design spec: `docs/superpowers/specs/2026-06-09-cpu-core-modularization-design.md`.
+- Diagnosis:
+  - `cpu_core.v` currently owns frontend sequencing, pipeline registers, hazards, load replay, M metadata/FIFO, divider issue, writeback, CSR/trap/MRET commit, redirect, predictor update, RAS, retire count, and side-effect kill rules.
+  - Phase54-61 timing failures show that local expression rewrites often preserve simulation but move the worst path to another endpoint in the same broad redirect/control cone.
+- Modularization target:
+  - keep `cpu_core` as the final orchestrator for stage advance, younger kill, redirect selection, and architectural side-effect commit;
+  - extract lower-risk modules first: `writeback_arb.v`, `commit_side_effect_gate.v`, and `retire_counter_ctrl.v`;
+  - defer high-risk modules such as `redirect_ctrl.v`, `bp_update_ctrl.v`, `load_replay_ctrl.v`, `ras_ctrl.v`, and `m_scoreboard.v` until the extraction method is proven.
+- Parameterization rule:
+  - every new data-path module must use `parameter XLEN = 32` and `[XLEN-1:0]` for architectural data;
+  - keep instruction fields explicitly 32-bit in this first non-C design;
+  - avoid new hard-coded RV32 datapath constants unless documented.
+- Retention policy for future RTL cuts:
+  - reject any refactor that breaks CSR acceptance;
+  - reject any refactor with CoreMark 2 above `682500` cycles;
+  - reject timing-sensitive refactors that are worse than the retained physical artifact WNS `-1.064 ns`;
+  - keep failed experiment conclusions in docs, not failed RTL.
+- Next recommended implementation phase:
+  - Phase62B should extract `writeback_arb.v` first, with focused tests and structural checks, before touching redirect.

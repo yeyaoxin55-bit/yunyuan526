@@ -710,3 +710,11 @@
 - Full Huoyue `soc_top` implementation passed QoR and generated a bitstream, but WNS was `-2.406 ns`, TNS `-849.795 ns`, with `909` setup failing endpoints. This is much worse than the `-1.064 ns` retention artifact.
 - The worst setup endpoint moved from `u_prefetch/current_pred_target` back to `u_core/redirect_pc_q_reg[5]/CE`: source `u_core/ex_mem_rd_reg[4]/C`, data delay `12.053 ns`, route `76.646%`, logic levels `16`. This proves the prefetch payload clear path was one symptom, not the controlling bottleneck.
 - Decision: revert Phase61 RTL/test/check changes. The next timing attempt should target the normal redirect PC CE/payload boundary itself or move to explicit DSP48 backend work; do not keep tuning prefetch flush payload invalidation alone.
+
+## 2026-06-09 Phase62 CPU Core Modularization Findings
+- The immediate `cpu_core` problem is ownership and coupling, not only file length. One module currently owns frontend, pipeline registers, hazards, replay, M metadata, writeback, CSR/trap/MRET, redirect, predictor/RAS, retire, and side-effect kill behavior.
+- The repeated physical failures mean a broad redirect extraction should not be the first cleanup step. Redirect PC/fallthrough/predictor update logic is the known timing hotspot, so touching it first would mix readability refactor risk with the hardest timing risk.
+- The first industrial extraction should be low-risk and contract-heavy. `writeback_arb.v` is the recommended first RTL cut because it can be mostly combinational, has a clear interface, and can forbid redirect/trap/predictor/RAS coupling by structure.
+- `commit_side_effect_gate.v` should follow because CSR precision depends on side-effect kill consistency. It should output named allow/kill bits, not compute payloads or PC targets.
+- Every new module must preserve RV32/RV64 direction by parameterizing data width with `XLEN`; new helper modules must not introduce fresh hard-coded 32-bit data paths except for instruction-format constants or documented reset/NOP values.
+- Future cleanup should add structural boundary checks for every extracted module. These checks are now part of the project's effective engineering style and are necessary to prevent a cleaner file layout from hiding the same cross-domain coupling.

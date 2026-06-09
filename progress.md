@@ -1714,3 +1714,22 @@
   - `scripts/check_project.ps1` passed with `Industrial M-unit boundary OK`, `M-unit backend boundary OK`, and `Project structure OK`.
   - `scripts/run_csr_phase_acceptance.ps1 -SkipVivado` passed with `CSR_PHASE_ACCEPTANCE_PASS=1`.
   - Post-revert CoreMark 2 returned to `COREMARK_RESULT_CYCLES=649893`, `COREMARK_CPI=1.110978`.
+
+## 2026-06-09 CSR Branch Session - Phase62 cpu_core modularization design
+- User asked to organize local and remote repo code toward industrial standard and noted that `cpu_core` feels too monolithic.
+- Confirmed branch `新增CSR` is synchronized with `origin/新增CSR`; the only pre-existing untracked file remains `docs/superpowers/plans/2026-06-04-csr-late-redirect-commit.md`.
+- Re-read Phase59-61 records and inspected `rtl/cpu_core.v` signal distribution.
+- Phase62 design direction:
+  - do not start by extracting redirect logic because it is the known timing hotspot;
+  - make `cpu_core` a top-level orchestrator over time;
+  - first future RTL cut should be `writeback_arb.v`, followed by `commit_side_effect_gate.v` and `retire_counter_ctrl.v`;
+  - every extracted module needs a focused test and a structural boundary check;
+  - every new data-path module must be `XLEN` parameterized to avoid blocking RV32/RV64 support.
+- Added Phase62 design spec:
+  - `docs/superpowers/specs/2026-06-09-cpu-core-modularization-design.md`
+- Updated `task_plan.md` and `findings.md` with Phase62A design decisions and retention rules.
+- Verification for this documentation-only phase:
+  - placeholder scan found only a pre-existing historical `findings.md` note, not a new Phase62 placeholder.
+  - `git diff --check` passed.
+  - `scripts/check_project.ps1` passed.
+  - No RTL files were modified in Phase62A.
